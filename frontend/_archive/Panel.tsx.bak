@@ -1,0 +1,238 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Events } from '@wailsio/runtime'
+import { Service, SettingsService } from '../bindings/transdict/internal/gui/index.js'
+import { Result } from '../bindings/transdict/internal/gui/models.js'
+import { Lang } from '../bindings/transdict/internal/langs/models.js'
+import { Config } from '../bindings/transdict/internal/settings/models.js'
+import { QueryBusy, QueryResult } from '../bindings/events/index.js'
+import Settings from './Settings'
+
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform)
+
+const macGlyphs: Record<string, string> = { cmd: '⌘', alt: '⌥', shift: '⇧', ctrl: '⌃', super: '' }
+const winLabels: Record<string, string> = { cmd: 'Ctrl', alt: 'Alt', shift: 'Shift', ctrl: 'Ctrl', super: 'Win' }
+
+function prettyShortcut(accel: string): string {
+  if (!accel) {
+    return '未设置'
+  }
+  const map = isMac ? macGlyphs : winLabels
+  return accel
+    .split('+')
+    .map((p) => map[p.trim().toLowerCase()] ?? p.toUpperCase())
+    .join(isMac ? '' : '+')
+}
+
+export default function Panel() {
+  const [result, setResult] = useState<Result | null>(null)
+  const [busy, setBusy] = useState('')
+  const [tab, setTab] = useState<'result' | 'settings'>('result')
+  const [langs, setLangs] = useState<Lang[]>([])
+  const [target, setTarget] = useState('zh-CN')
+  const [shortcut, setShortcut] = useState('')
+  const [readyTR, setReadyTR] = useState(0)
+  const audio = useRef<HTMLAudioElement | null>(null)
+
+  const applyCfg = (cfg: Config) => {
+    setTarget(cfg.targetLang)
+    setShortcut(cfg.shortcutCapture)
+    setReadyTR((cfg.translate ?? []).filter((p) => p.enabled).length)
+  }
+
+  useEffect(() => {
+    const offResult = Events.On(QueryResult, (ev: { data: Result }) => {
+      setResult(ev.data)
+      setBusy('')
+      setTab('result')
+    })
+    const offBusy = Events.On(QueryBusy, (ev: { data: string }) => {
+      setBusy(ev.data ?? '')
+      setTab('result')
+    })
+    void SettingsService.Languages().then((ls) => setLangs(ls ?? []))
+    void SettingsService.Get().then(applyCfg)
+    return () => {
+      offResult()
+      offBusy()
+    }
+  }, [])
+
+  const ocrList = result?.ocr ?? []
+  const ocrTexts = useMemo(() => ocrList.filter((o) => !o.error), [ocrList])
+  const source = result?.sourceText ?? ''
+
+  const speak = (text: string) => {
+    if (!text.trim()) {
+      return
+    }
+    const el = audio.current ?? new Audio()
+    audio.current = el
+    // Youdao's endpoint covers zh/en well and needs no key; long passages are
+    // truncated upstream, so read the first screenful rather than fail.
+    el.src = `https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(text.slice(0, 800))}&type=1`
+    void el.play().catch(() => setBusy('朗读不可用'))
+  }
+
+  return (
+    <div className="shell">
+      <div className="dragbar" data-wml-drag>
+        <span className="title">Transdict</span>
+        <span>{busy || (result ? `耗时 ${result.elapsedMs} ms` : '等待截图')}</span>
+      </div>
+
+      <div className="topbar">
+        <div className="tabs">
+          <button className={tab === 'result' ? 'active' : ''} onClick={() => setTab('result')}>
+            翻译结果
+          </button>
+          <button className={tab === 'settings' ? 'active' : ''} onClick={() => setTab('settings')}>
+            服务设置
+          </button>
+        </div>
+
+        <select
+          value={target}
+          onChange={(e) => {
+            setTarget(e.target.value)
+            void Service.SetTargetLang(e.target.value)
+          }}
+          aria-label="目标语言"
+        >
+          {langs
+            .filter((l) => l.code !== 'auto')
+            .map((l) => (
+              <option key={l.code} value={l.code}>
+                译为 {l.name}
+              </option>
+            ))}
+        </select>
+
+        <div className="spacer" />
+
+        <button onClick={() => void Service.Start().catch((e) => setBusy(String(e)))}>重新截图</button>
+        <button
+          disabled={!source}
+          onClick={() => {
+            void Service.CopyText(source)
+            setBusy('已复制原文')
+          }}
+        >
+          复制原文
+        </button>
+        <button
+          disabled={!source}
+          onClick={() => speak(source)}
+          aria-label="朗读原文"
+        >
+          朗读
+        </button>
+        <button className="ghost" onClick={() => void Service.ClosePanel()}>
+          收起
+        </button>
+      </div>
+
+      {tab === 'settings' ? (
+        <Settings onSaved={applyCfg} />
+      ) : !result ? (
+        <div className="empty">
+          <div className="big">按下快捷键框选屏幕上的文字</div>
+          <div>
+            快捷键 <kbd>{prettyShortcut(shortcut)}</kbd>，可在「服务设置」中修改
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <button className="primary" onClick={() => void Service.Start().catch((e) => setBusy(String(e)))}>
+              立即截图
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="content">
+          <div className="col">
+            {result?.cropDataURL && (
+              <div className="card" style={{ flex: '0 1 auto' }}>
+                <h3>截图</h3>
+                <div className="shot">
+                  <img src={result.cropDataURL} alt="选区截图" />
+                </div>
+              </div>
+            )}
+            <div className="card" style={{ flex: '1 1 auto' }}>
+              <h3>
+                原文{result?.detected ? ` · ${result.detected}` : ''}
+                <span className="spacer" />
+                {ocrTexts.length > 0 && (
+                  <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>
+                    {ocrTexts.map((o) => o.label).join(' / ')}
+                  </span>
+                )}
+              </h3>
+              <div className={`body ${source ? '' : 'muted'}`}>{source || '尚未识别文字'}</div>
+            </div>
+            {ocrList.length > 0 && (
+              <div className="card" style={{ flex: '0 0 auto', maxHeight: '28%' }}>
+                <h3>OCR 服务</h3>
+                <div className="body" style={{ padding: 0 }}>
+                  {ocrList.map((o) => (
+                    <div key={o.provider} className="meta" style={{ padding: '7px 13px', borderTop: '1px solid var(--stroke)' }}>
+                      <span className={`dot ${o.error ? 'bad' : ''}`} />
+                      <span>{o.label}</span>
+                      <time>{o.elapsedMs}ms</time>
+                      <div className="spacer" />
+                      {o.error ? <span className="error">{o.error}</span> : null}
+                      <button className="tiny" onClick={() => void Service.RetryOCR(o.provider).catch((e) => setBusy(String(e)))}>
+                        重试
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="col">
+            {result?.error && <div className="card"><div className="body error">{result.error}</div></div>}
+            {(result?.translate ?? []).map((t) => (
+              <div className="card" key={t.provider} style={{ flex: '0 0 auto' }}>
+                <h3>
+                  {t.label}
+                  <span className="spacer" />
+                  <time style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>{t.elapsedMs}ms</time>
+                  <button
+                    className="tiny"
+                    onClick={() => {
+                      void Service.CopyText(t.text)
+                      setBusy(`已复制 ${t.label}`)
+                    }}
+                  >
+                    复制
+                  </button>
+                  <button className="tiny" onClick={() => speak(t.text)}>
+                    朗读
+                  </button>
+                </h3>
+                <div className={`body ${t.error ? 'error' : ''}`}>{t.error || t.text}</div>
+              </div>
+            ))}
+            {source && (
+              <div style={{ flex: '0 0 auto', display: 'flex', gap: 8 }}>
+                <button onClick={() => void Service.ReTranslate().catch((e) => setBusy(String(e)))}>
+                  全部重新翻译
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="footer">
+        <span>{result ? `会话 ${result.session.slice(0, 8)}` : '—'}</span>
+        <div className="spacer" />
+        <span>
+          {result
+            ? `${(result.translate ?? []).filter((t) => !t.error).length}/${(result.translate ?? []).length} 个译文成功`
+            : `已启用 ${readyTR} 个译文服务`}
+        </span>
+      </div>
+    </div>
+  )
+}

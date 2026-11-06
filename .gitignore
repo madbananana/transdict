@@ -1,0 +1,28 @@
+# Build output
+bin
+.task
+frontend/dist
+frontend/node_modules
+*.syso
+build/linux/appimage/build
+build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
+build/windows/nsis/*.exe
+
+# Mobile generated (per-machine; overlays hold absolute paths)
+build/ios/xcode/overlay.json
+build/ios/xcode/gen/
+build/android/overlay.json
+build/android/gen/
+
+# Editors
+.openidea/
+.idea/
+.vscode/
+*.iml
+
+# OS / local junk
+.DS_Store
+*.log
+*.tmp
+.env
+.env.*

@@ -1,0 +1,187 @@
+import { useEffect, useState } from 'react'
+import { SettingsService } from '../bindings/transdict/internal/gui/index.js'
+import { Config, Provider, ProviderKind } from '../bindings/transdict/internal/settings/models.js'
+
+const kinds: Record<'ocr' | 'tr', { value: ProviderKind; name: string }[]> = {
+  ocr: [
+    { value: ProviderKind.OCRVision, name: '视觉大模型 (OpenAI 兼容)' },
+    { value: ProviderKind.OCRImage, name: '百度通用文字识别' },
+  ],
+  tr: [
+    { value: ProviderKind.TRYoudao, name: '有道（无需密钥）' },
+    { value: ProviderKind.TRGoogle, name: 'Google（需代理）' },
+    { value: ProviderKind.TROpenAI, name: 'AI 模型（OpenAI 兼容）' },
+    { value: ProviderKind.TRDeepL, name: 'DeepL' },
+  ],
+}
+
+function fieldKeys(kind: ProviderKind): string[] {
+  switch (kind) {
+    case ProviderKind.OCRImage:
+      return ['appId', 'secret']
+    case ProviderKind.OCRVision:
+    case ProviderKind.TROpenAI:
+      return ['baseUrl', 'apiKey', 'model']
+    case ProviderKind.TRDeepL:
+      return ['apiKey']
+    default:
+      return []
+  }
+}
+
+const fieldLabel: Record<string, string> = {
+  appId: 'API Key',
+  secret: 'Secret Key',
+  baseUrl: '接口地址',
+  apiKey: 'API Key',
+  model: '模型',
+}
+
+export default function Settings({ onSaved }: { onSaved: (c: Config) => void }) {
+  const [cfg, setCfg] = useState<Config | null>(null)
+  const [status, setStatus] = useState('')
+
+  useEffect(() => {
+    void SettingsService.Get().then((c) => setCfg(c))
+  }, [])
+
+  if (!cfg) {
+    return <div className="settings">载入设置…</div>
+  }
+
+  const patch = (id: string, key: keyof Provider, value: string | boolean) => {
+    setCfg((prev) => {
+      if (!prev) return prev
+      const upd = (list: Provider[]) =>
+        list.map((p) => {
+          if (p.id !== id) return p
+          const next = { ...p, [key]: value } as Provider
+          return next
+        })
+      return { ...prev, ocr: upd(prev.ocr ?? []), translate: upd(prev.translate ?? []) } as Config
+    })
+  }
+
+  const save = () => {
+    if (!cfg) return
+    void SettingsService.Save(cfg)
+      .then(() => {
+        setStatus('已保存')
+        onSaved(cfg)
+        setTimeout(() => setStatus(''), 2500)
+      })
+      .catch((e) => setStatus(String(e)))
+  }
+
+  const add = (isOCR: boolean, kind: ProviderKind) => {
+    void SettingsService.AddProvider(kind as unknown as string, isOCR).then((p) => {
+      setCfg((prev) =>
+        prev
+          ? ({
+              ...prev,
+              ocr: isOCR ? [...(prev.ocr ?? []), p] : prev.ocr,
+              translate: isOCR ? prev.translate : [...(prev.translate ?? []), p],
+            } as Config)
+          : prev,
+      )
+    })
+  }
+
+  const remove = (id: string) => {
+    void SettingsService.RemoveProvider(id).then(() => {
+      setCfg((prev) =>
+        prev
+          ? ({
+              ...prev,
+              ocr: (prev.ocr ?? []).filter((p) => p.id !== id),
+              translate: (prev.translate ?? []).filter((p) => p.id !== id),
+            } as Config)
+          : prev,
+      )
+    })
+  }
+
+  const list = (items: Provider[] | null | undefined, isOCR: boolean) => (
+    <>
+      {(items ?? []).map((p) => {
+        const fields = fieldKeys(p.kind)
+        return (
+          <div className="row" key={p.id}>
+            <label className="label">
+              <input type="checkbox" checked={p.enabled} onChange={(e) => patch(p.id, 'enabled', e.target.checked)} />
+              <input
+                type="text"
+                value={p.label}
+                style={{ width: 110 }}
+                onChange={(e) => patch(p.id, 'label', e.target.value)}
+              />
+            </label>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {fields.map((f) => (
+                <div className="field" key={f}>
+                  <input
+                    type="text"
+                    placeholder={fieldLabel[f]}
+                    value={(p as unknown as Record<string, string>)[f] ?? ''}
+                    onChange={(e) => patch(p.id, f as keyof Provider, e.target.value)}
+                  />
+                </div>
+              ))}
+              {fields.length === 0 && <span className="hintline">该服务无需密钥。</span>}
+            </div>
+            <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+              <button className="tiny" onClick={() => remove(p.id)}>
+                删除
+              </button>
+            </div>
+          </div>
+        )
+      })}
+      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+        {kinds[isOCR ? 'ocr' : 'tr'].map((k) => (
+          <button key={k.value as string} className="ghost tiny" onClick={() => add(isOCR, k.value)}>
+            + {k.name}
+          </button>
+        ))}
+      </div>
+    </>
+  )
+
+  return (
+    <div className="settings">
+      <div className="group">
+        <h4>OCR 服务</h4>
+        {list(cfg.ocr, true)}
+        <p className="hintline">
+          视觉模型走 OpenAI 兼容接口，可填 DeepSeek、通义、Kimi、Ollama 等地址；百度需在开放平台创建「通用文字识别（高精度版）」应用。
+        </p>
+      </div>
+
+      <div className="group">
+        <h4>翻译服务</h4>
+        {list(cfg.translate, false)}
+        <p className="hintline">可同时启用多个，结果并列显示便于对比。</p>
+      </div>
+
+      <div className="group">
+        <h4>快捷键</h4>
+        <div className="row">
+          <label className="label">截图翻译</label>
+          <input
+            type="text"
+            value={cfg.shortcutCapture ?? ''}
+            onChange={(e) => setCfg({ ...cfg, shortcutCapture: e.target.value } as Config)}
+          />
+          <span className="hintline">格式 cmd+shift+t / ctrl+alt+a，cmd 在 Windows 上即 Win 键</span>
+        </div>
+      </div>
+
+      <div className="group" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <button className="primary" onClick={save}>
+          保存设置
+        </button>
+        {status && <span className="meta">{status}</span>}
+      </div>
+    </div>
+  )
+}

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=Transdict
+Comment=Cross-platform translation and dictionary tool
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/transdict %u
+Terminal=false
+Type=Application
+Icon=transdict
+Categories=Utility;
+StartupWMClass=transdict
+
+ 
