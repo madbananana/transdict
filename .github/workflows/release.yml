@@ -1,0 +1,221 @@
+name: Release
+
+# Pushing a v* tag builds the installers and publishes them as a GitHub
+# Release. A manual run builds the same artifacts without publishing, which is
+# the way to try the pipeline before tagging.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without the leading v (for example 0.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            version="$INPUT_VERSION"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          node build/stamp-version.mjs "$version"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install wails3
+        shell: bash
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Build universal app
+        env:
+          APP_VERSION: ${{ steps.version.outputs.value }}
+        run: wails3 task darwin:package:universal APP_VERSION="$APP_VERSION"
+
+      # create:app:bundle compiles apple-translate for the runner's own arch.
+      # A universal bundle needs both slices, and the bundle has to be signed
+      # again after the helper is replaced. Without a Developer ID certificate
+      # in the keychain the task signs ad-hoc; users then have to allow the app
+      # in System Settings on first launch.
+      - name: Make the Swift helper universal
+        shell: bash
+        run: |
+          helper="bin/transdict.app/Contents/MacOS/apple-translate"
+          swiftc -parse-as-library -O -target arm64-apple-macos15.0 \
+            -o "$RUNNER_TEMP/apple-translate-arm64" build/darwin/apple-translate.swift
+          swiftc -parse-as-library -O -target x86_64-apple-macos15.0 \
+            -o "$RUNNER_TEMP/apple-translate-x86_64" build/darwin/apple-translate.swift
+          lipo -create "$RUNNER_TEMP/apple-translate-arm64" "$RUNNER_TEMP/apple-translate-x86_64" \
+            -output "$helper"
+          codesign --force --deep --sign - bin/transdict.app
+
+      - name: Create DMG
+        env:
+          APP_VERSION: ${{ steps.version.outputs.value }}
+        run: wails3 task darwin:create:dmg APP_VERSION="$APP_VERSION"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: bin/*.dmg
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            version="$INPUT_VERSION"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          node build/stamp-version.mjs "$version"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install wails3
+        shell: bash
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis --no-progress -y
+
+      - name: Build installer
+        shell: bash
+        env:
+          APP_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          export PATH="$PATH:/c/Program Files (x86)/NSIS"
+          wails3 task windows:package ARCH=amd64 APP_VERSION="$APP_VERSION"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: bin/transdict-amd64-installer.exe
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-24.04
+    env:
+      # appimagetool is itself an AppImage; extracting it avoids needing FUSE
+      # on a runner that never mounts one.
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+      GIT_COMMITTER_NAME: Transdict
+      GIT_COMMITTER_EMAIL: transdict@users.noreply.github.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install WebKitGTK build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            version="$INPUT_VERSION"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          node build/stamp-version.mjs "$version"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install wails3
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Build packages
+        env:
+          APP_VERSION: ${{ steps.version.outputs.value }}
+          # nfpm expands ${GOARCH} in its manifest; the Taskfile does not export it.
+          GOARCH: amd64
+        run: |
+          wails3 task linux:create:deb APP_VERSION="$APP_VERSION"
+          wails3 task linux:create:appimage APP_VERSION="$APP_VERSION"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            bin/*.deb
+            bin/*.AppImage
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, windows, linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
