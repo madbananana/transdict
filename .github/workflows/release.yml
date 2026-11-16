@@ -21,7 +21,9 @@ concurrency:
 
 jobs:
   macos:
-    runs-on: macos-15
+    # The Swift helper imports macOS 26's TranslationSession initializer, which
+    # the macos-15 image's SDK does not declare; macos-26 ships the newer Xcode.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
