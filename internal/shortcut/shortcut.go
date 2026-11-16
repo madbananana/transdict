@@ -13,15 +13,19 @@ import (
 // the build does not offer that action, so its shortcut is skipped rather than
 // registered as a key press that silently does nothing.
 type Actions struct {
-	Capture   func()
-	Input     func()
-	Selection func()
-	SilentOCR func()
-	Mini      func()
-	Clipboard func()
-	Replace   func()
-	ODict     func()
-	Settings  func()
+	Capture      func()
+	Input        func()
+	Selection    func()
+	ToggleSelect func()
+	SilentOCR    func()
+	OCRShot      func()
+	OCRClipboard func()
+	OCRWindow    func()
+	Clipboard    func()
+	Replace      func()
+	Polish       func()
+	ODict        func()
+	Settings     func()
 }
 
 type registration struct {
@@ -52,11 +56,15 @@ func slots(a Actions) []struct {
 	}{
 		{settings.SlotInput, a.Input},
 		{settings.SlotSelection, a.Selection},
+		{settings.SlotToggleSelect, a.ToggleSelect},
 		{settings.SlotCapture, a.Capture},
 		{settings.SlotSilentOCR, a.SilentOCR},
-		{settings.SlotMini, a.Mini},
+		{settings.SlotOCRShot, a.OCRShot},
+		{settings.SlotOCRClipboard, a.OCRClipboard},
+		{settings.SlotOCRWindow, a.OCRWindow},
 		{settings.SlotClipboard, a.Clipboard},
 		{settings.SlotReplace, a.Replace},
+		{settings.SlotPolish, a.Polish},
 		{settings.SlotODict, a.ODict},
 		{settings.SlotSettings, a.Settings},
 	}
@@ -102,9 +110,10 @@ func Bind(app *application.App, cfg settings.Config, a Actions) []Problem {
 func Conflicts(cfg settings.Config) []string {
 	seen := map[string]string{}
 	var out []string
-	for _, slot := range []string{settings.SlotInput, settings.SlotSelection, settings.SlotCapture,
-		settings.SlotSilentOCR, settings.SlotMini, settings.SlotClipboard, settings.SlotReplace,
-		settings.SlotSettings} {
+	for _, slot := range []string{settings.SlotInput, settings.SlotSelection, settings.SlotToggleSelect,
+		settings.SlotCapture, settings.SlotSilentOCR, settings.SlotOCRShot, settings.SlotOCRClipboard,
+		settings.SlotOCRWindow, settings.SlotClipboard, settings.SlotReplace,
+		settings.SlotPolish, settings.SlotSettings} {
 		for _, accel := range cfg.Accel(slot) {
 			accel = strings.ToLower(strings.TrimSpace(accel))
 			if accel == "" {

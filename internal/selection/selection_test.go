@@ -25,10 +25,18 @@ func (f *fakePasteboard) Write(text string) bool {
 func withHooks(t *testing.T, native func() (string, bool), cp func() error, count func() int64) {
 	t.Helper()
 	originalNative, originalCopy, originalCount, originalWait := readNative, postCopy, countChanges, waitFunc
+	originalMenu, originalForce, originalKind := pressCopyMenu, forceCopy, forceKind
+	originalScript, originalPrefer := readScript, preferScript
 	readNative, postCopy, countChanges = native, cp, count
+	pressCopyMenu = func() error { return ErrUnsupported }
+	readScript = func() (string, bool) { return "", false }
+	forceCopy, forceKind = true, "shortcut"
+	preferScript = true
 	waitFunc = func(time.Duration) {}
 	t.Cleanup(func() {
 		readNative, postCopy, countChanges, waitFunc = originalNative, originalCopy, originalCount, originalWait
+		pressCopyMenu, forceCopy, forceKind = originalMenu, originalForce, originalKind
+		readScript, preferScript = originalScript, originalPrefer
 	})
 }
 
@@ -53,6 +61,62 @@ func TestGrabEmptySelectionIsAnAnswer(t *testing.T) {
 
 	if _, err := Grab(&fakePasteboard{}); !errors.Is(err, ErrNothingSelected) {
 		t.Fatalf("err = %v, want ErrNothingSelected", err)
+	}
+}
+
+func TestGrabAsksTheBrowserBeforeCopying(t *testing.T) {
+	withHooks(t,
+		func() (string, bool) { return "", false },
+		func() error { t.Fatal("must not synthesize a copy"); return nil },
+		func() int64 { return 0 })
+	readScript = func() (string, bool) { return "  page words  ", true }
+
+	text, err := Grab(&fakePasteboard{})
+	if err != nil || text != "page words" {
+		t.Fatalf("Grab = %q, %v, want the trimmed browser answer", text, err)
+	}
+}
+
+func TestGrabEmptyBrowserAnswerIsNothingSelected(t *testing.T) {
+	withHooks(t,
+		func() (string, bool) { return "", false },
+		func() error { t.Fatal("must not synthesize a copy"); return nil },
+		func() int64 { return 0 })
+	readScript = func() (string, bool) { return "   ", true }
+
+	if _, err := Grab(&fakePasteboard{}); !errors.Is(err, ErrNothingSelected) {
+		t.Fatalf("err = %v, want ErrNothingSelected", err)
+	}
+}
+
+func TestGrabFallsThroughWhenTheBrowserScriptFails(t *testing.T) {
+	pb := &fakePasteboard{}
+	count := int64(1)
+	withHooks(t,
+		func() (string, bool) { return "", false },
+		func() error { pb.text = "copied words"; count = 2; return nil },
+		func() int64 { return count })
+	readScript = func() (string, bool) { return "", false }
+
+	text, err := Grab(pb)
+	if err != nil || text != "copied words" {
+		t.Fatalf("Grab = %q, %v", text, err)
+	}
+}
+
+func TestGrabSkipsTheBrowserScriptWhenPreferenceIsOff(t *testing.T) {
+	pb := &fakePasteboard{}
+	count := int64(1)
+	withHooks(t,
+		func() (string, bool) { return "", false },
+		func() error { pb.text = "copied words"; count = 2; return nil },
+		func() int64 { return count })
+	readScript = func() (string, bool) { return "page words", true }
+	preferScript = false
+
+	text, err := Grab(pb)
+	if err != nil || text != "copied words" {
+		t.Fatalf("Grab = %q, %v, want the copy route", text, err)
 	}
 }
 
@@ -87,6 +151,57 @@ func TestGrabWithoutSequenceCounterComparesText(t *testing.T) {
 	text, err := Grab(pb)
 	if err != nil || text != "typed selection" {
 		t.Fatalf("Grab = %q, %v", text, err)
+	}
+}
+
+// 强制取词's 菜单栏动作复制 runs the app's own Copy command before any chord,
+// because that is the route apps which ignore synthetic keys still honour.
+func TestGrabPrefersTheCopyMenuCommand(t *testing.T) {
+	pb := &fakePasteboard{text: "old note"}
+	count := int64(1)
+	withHooks(t,
+		func() (string, bool) { return "", false },
+		func() error { t.Fatal("chord must not run when the menu answered"); return nil },
+		func() int64 { return count })
+	forceKind = "menu"
+	pressCopyMenu = func() error { pb.text = "menu answer"; count = 2; return nil }
+
+	text, err := Grab(pb)
+	if err != nil || text != "menu answer" {
+		t.Fatalf("Grab = %q, %v, want the menu answer", text, err)
+	}
+	if len(pb.written) != 1 || pb.written[0] != "old note" {
+		t.Errorf("restore = %v, want the original pasteboard back", pb.written)
+	}
+}
+
+func TestGrabFallsBackToTheChordWhenTheMenuCannotAnswer(t *testing.T) {
+	pb := &fakePasteboard{text: "old note"}
+	count := int64(1)
+	withHooks(t,
+		func() (string, bool) { return "", false },
+		func() error { pb.text = "chord answer"; count = 2; return nil },
+		func() int64 { return count })
+	forceKind = "menu"
+	pressCopyMenu = func() error { return errors.New("no Copy item") }
+
+	text, err := Grab(pb)
+	if err != nil || text != "chord answer" {
+		t.Fatalf("Grab = %q, %v, want the chord to take over", text, err)
+	}
+}
+
+// 启用强制取词 off means an unreadable app is reported, not guessed at by
+// rewriting the pasteboard.
+func TestGrabDeclinesWithoutForceCopy(t *testing.T) {
+	withHooks(t,
+		func() (string, bool) { return "", false },
+		func() error { t.Fatal("must not synthesize a copy"); return nil },
+		func() int64 { return 1 })
+	forceCopy = false
+
+	if _, err := Grab(&fakePasteboard{}); !errors.Is(err, ErrNoAccess) {
+		t.Fatalf("err = %v, want ErrNoAccess", err)
 	}
 }
 
@@ -158,10 +273,65 @@ func (r *reports) all() []string {
 func withPoll(t *testing.T, sel func() (string, bool), canPoll bool, isSelf func() bool) {
 	t.Helper()
 	originalNative, originalPollable, originalSelf := readNative, pollable, ownForeground
+	originalScript, originalPrefer := readScript, preferScript
 	readNative, pollable, ownForeground = sel, canPoll, isSelf
+	readScript = func() (string, bool) { return "", false }
+	preferScript = true
 	t.Cleanup(func() {
 		readNative, pollable, ownForeground = originalNative, originalPollable, originalSelf
+		readScript, preferScript = originalScript, originalPrefer
 	})
+}
+
+// watchInBackground runs the polling watcher for the duration of the test. The
+// cleanup waits for the loop to exit, because withPoll's globals are restored
+// in a later cleanup and the loop reads them on every tick.
+func watchInBackground(t *testing.T, out *reports) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = Watch(ctx, time.Millisecond, out.add)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
+	})
+}
+
+func TestWatchSkipsTheBrowserScriptWhenPreferenceIsOff(t *testing.T) {
+	withPoll(t, func() (string, bool) { return "", false }, true, func() bool { return false })
+	readScript = func() (string, bool) { return "page words", true }
+	preferScript = false
+
+	out := &reports{}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+	_ = Watch(ctx, time.Millisecond, out.add)
+
+	if got := out.all(); len(got) != 0 {
+		t.Fatalf("reports = %q, want none while the preference is off", got)
+	}
+}
+
+func TestWatchFallsBackToTheBrowserScript(t *testing.T) {
+	withPoll(t, func() (string, bool) { return "", false }, true, func() bool { return false })
+	readScript = func() (string, bool) { return "page words", true }
+
+	out := &reports{}
+	watchInBackground(t, out)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && len(out.all()) == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	if got := out.all(); len(got) != 1 || got[0] != "page words" {
+		t.Fatalf("reports = %q, want the one browser answer", got)
+	}
 }
 
 func TestWatchReportsEachNewSelectionOnce(t *testing.T) {
@@ -171,9 +341,7 @@ func TestWatchReportsEachNewSelectionOnce(t *testing.T) {
 	out := &reports{}
 	withPoll(t, sel.read, true, func() bool { return false })
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = Watch(ctx, time.Millisecond, out.add) }()
+	watchInBackground(t, out)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && len(out.all()) < 3 {
@@ -194,9 +362,7 @@ func TestWatchStaysQuietWhileOwnAppIsFrontmost(t *testing.T) {
 		return true
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = Watch(ctx, time.Millisecond, out.add) }()
+	watchInBackground(t, out)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

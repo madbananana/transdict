@@ -19,6 +19,19 @@ import * as langs$0 from "../langs/models.js";
 // @ts-ignore: Unused imports
 import * as settings$0 from "../settings/models.js";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as $models from "./models.js";
+
+/**
+ * AddDictFiles appends imported dictionaries. The first import also fills the
+ * folder box with its directory, so 缺配置 never marks a service that will run;
+ * the file list then narrows which .mdx in that folder answer.
+ */
+export function AddDictFiles(id: string, paths: string[] | null): $CancellablePromise<void> {
+    return $Call.ByID(3175652047, id, paths);
+}
+
 /**
  * AddProvider creates one configured instance of a service type, pre-filled with
  * the defaults its package registered.
@@ -50,12 +63,44 @@ export function Contexts(): $CancellablePromise<settings$0.Label[] | null> {
     return $Call.ByID(633446905);
 }
 
+/**
+ * DictFiles lists the imported dictionaries of one service.
+ */
+export function DictFiles(id: string): $CancellablePromise<string[] | null> {
+    return $Call.ByID(2939108184, id);
+}
+
+/**
+ * FetchModels is 从云端获取模型: the saved endpoint's own catalog, so a proxy or
+ * gateway can answer for itself instead of every model being typed by hand.
+ */
+export function FetchModels(id: string): $CancellablePromise<string[] | null> {
+    return $Call.ByID(151238613, id);
+}
+
 export function Get(): $CancellablePromise<settings$0.Config> {
     return $Call.ByID(3204433771);
 }
 
 export function Languages(): $CancellablePromise<langs$0.Lang[] | null> {
     return $Call.ByID(1246354020);
+}
+
+/**
+ * LogFolder is 高级 → 日志's path. EasyDict shows 日志目录 with a reveal button;
+ * the row is drawn from this string so the folder cannot drift from the one
+ * the process actually writes.
+ */
+export function LogFolder(): $CancellablePromise<string> {
+    return $Call.ByID(627488429);
+}
+
+/**
+ * RemoveDictFile drops one imported dictionary. Removing the last one leaves
+ * the folder scan in charge, which is the older configuration.
+ */
+export function RemoveDictFile(id: string, path: string): $CancellablePromise<void> {
+    return $Call.ByID(2548920843, id, path);
 }
 
 /**
@@ -75,11 +120,37 @@ export function Reset(): $CancellablePromise<void> {
 }
 
 /**
+ * RevealLogs is 在 Finder 中显示: the folder holding transdict.log, created on
+ * demand so the button works before anything has been logged.
+ */
+export function RevealLogs(): $CancellablePromise<void> {
+    return $Call.ByID(1413726063);
+}
+
+/**
  * Save normalizes and persists the whole configuration. The settings page edits
  * a working copy, so a rejected save leaves the store untouched.
  */
 export function Save(next: settings$0.Config): $CancellablePromise<void> {
     return $Call.ByID(549165436, next);
+}
+
+/**
+ * SelectModel switches the model one service answers with, from its card's
+ * model menu. Like EasyDict's menu it only stores the choice: the answer on
+ * screen keeps the words the old model wrote, and the next query or 重试 asks
+ * with the new one.
+ */
+export function SelectModel(providerID: string, model: string): $CancellablePromise<void> {
+    return $Call.ByID(1438232710, providerID, model);
+}
+
+/**
+ * ServiceHelp names the site where an empty key is created, so 缺少密钥 can
+ * point at it instead of only saying the service cannot run yet.
+ */
+export function ServiceHelp(kind: string, baseURL: string): $CancellablePromise<$models.ServiceHelp> {
+    return $Call.ByID(2989309035, kind, baseURL);
 }
 
 /**
@@ -89,6 +160,15 @@ export function Save(next: settings$0.Config): $CancellablePromise<void> {
  */
 export function ServiceTypes(category: string): $CancellablePromise<settings$0.ServiceType[] | null> {
     return $Call.ByID(3083827225, category);
+}
+
+/**
+ * SetAppShortcut rebinds one 快捷键 menu action; an empty accelerator leaves
+ * the action in the menu without a key. The store notifies watchers, so the
+ * menu items take the new key without a restart.
+ */
+export function SetAppShortcut(action: string, accel: string): $CancellablePromise<void> {
+    return $Call.ByID(2208432884, action, accel);
 }
 
 /**
@@ -125,10 +205,28 @@ export function SetTargetLang(code: string): $CancellablePromise<void> {
 }
 
 /**
+ * SetWindowOption is 窗口配置: one switch of one window, saved the moment it is
+ * flipped so the next answer in that window already follows it.
+ */
+export function SetWindowOption(role: string, option: string, on: boolean): $CancellablePromise<void> {
+    return $Call.ByID(3765201162, role, option, on);
+}
+
+/**
  * Slots lists the actions that can carry a global accelerator.
  */
 export function Slots(): $CancellablePromise<settings$0.Label[] | null> {
     return $Call.ByID(3615315482);
+}
+
+/**
+ * TestProvider is the 验证 button in a service's detail pane. It runs one tiny
+ * query through the saved configuration, so a wrong key or endpoint is
+ * diagnosed here rather than in a full translation. The reply is a short
+ * summary; a failure returns the provider's own reason as the error.
+ */
+export function TestProvider(id: string): $CancellablePromise<string> {
+    return $Call.ByID(876099912, id);
 }
 
 /**
@@ -145,4 +243,13 @@ export function UpdateProvider(p: settings$0.Provider): $CancellablePromise<void
  */
 export function Version(): $CancellablePromise<string> {
     return $Call.ByID(3117553843);
+}
+
+/**
+ * VocabularyDirWritable is 生词本's 所选目录不可写。warning. A path that does not
+ * exist yet stays usable: the notebook creates the folder on the first write,
+ * so probing here must not treat "not created" as "cannot create".
+ */
+export function VocabularyDirWritable(dir: string): $CancellablePromise<boolean> {
+    return $Call.ByID(267263572, dir);
 }

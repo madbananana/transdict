@@ -159,6 +159,28 @@ func TestClearByAgeKeepsRecentAndFavorites(t *testing.T) {
 	}
 }
 
+func TestClearFavoritesDropsOnlyStarred(t *testing.T) {
+	s := newTestStore(t)
+	plain := entry("plain", "普通", time.Now())
+	starred := entry("starred", "收藏了", time.Now())
+	starred.Favorite = true
+	for _, e := range []Entry{plain, starred} {
+		if err := s.Put(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dropped, err := s.ClearFavorites()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dropped != 1 {
+		t.Errorf("ClearFavorites 删除 %d 条, 期望 1", dropped)
+	}
+	if got := s.List(Filter{}, 0); len(got) != 1 || got[0].ID != "plain" {
+		t.Errorf("清空收藏后剩下 %v", got)
+	}
+}
+
 // The file is the user's data: writing it atomically and reading it back
 // unchanged is the whole contract.
 func TestStoreRoundTrip(t *testing.T) {
@@ -349,5 +371,47 @@ func TestExportJSONKeepsEveryField(t *testing.T) {
 	empty := &Store{path: filepath.Join(t.TempDir(), "h.json")}
 	if got := empty.Export(Filter{}, FormatJSON); strings.TrimSpace(got) != "[]" {
 		t.Errorf("空记录的 JSON 导出应是空数组，得到 %q", got)
+	}
+}
+
+// 快捷动作 添加到收藏 works without a history row: it stars the newest matching
+// row when one exists, adds a favorite otherwise, and never duplicates.
+func TestFavoriteAddsOnceAndPrefersTheNewestRow(t *testing.T) {
+	s := newTestStore(t)
+
+	if on, err := s.Favorite("hello", "你好", "en", "zh-CN"); err != nil || !on {
+		t.Fatalf("Favorite = %v, %v", on, err)
+	}
+	list := s.List(Filter{Favorites: true}, 0)
+	if len(list) != 1 || list[0].Source != "hello" || list[0].Target != "你好" {
+		t.Fatalf("收藏 = %+v", list)
+	}
+
+	if on, err := s.Favorite("hello", "你好", "en", "zh-CN"); err != nil || !on {
+		t.Fatalf("重复收藏 = %v, %v", on, err)
+	}
+	if got := len(s.List(Filter{Favorites: true}, 0)); got != 1 {
+		t.Errorf("重复收藏后 %d 条, want 1", got)
+	}
+
+	// An existing history row is starred instead of a duplicate being added.
+	if err := s.Put(Entry{ID: "q1", Source: "world"}); err != nil {
+		t.Fatal(err)
+	}
+	if on, err := s.Favorite("world", "世界", "en", "zh-CN"); err != nil || !on {
+		t.Fatalf("Favorite(world) = %v, %v", on, err)
+	}
+	all := s.List(Filter{}, 0)
+	if len(all) != 2 {
+		t.Fatalf("总行数 = %d, want 2", len(all))
+	}
+	var starred *Entry
+	for i := range all {
+		if all[i].ID == "q1" {
+			starred = &all[i]
+		}
+	}
+	if starred == nil || !starred.Favorite || starred.Target != "世界" {
+		t.Errorf("应收藏已有行 q1 并补上译文, 实际 %+v", starred)
 	}
 }

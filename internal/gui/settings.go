@@ -1,16 +1,20 @@
 package gui
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"net/url"
+	"os"
 	"strings"
+	"time"
 
 	"transdict/internal/autostart"
 	"transdict/internal/dict"
 	"transdict/internal/l10n"
 	"transdict/internal/langs"
+	"transdict/internal/logging"
 	"transdict/internal/netp"
 	"transdict/internal/ocr"
 	"transdict/internal/settings"
@@ -26,15 +30,88 @@ type SettingsService struct {
 	version string
 }
 
+// ServiceHelp is 缺少密钥's 参见 👉 link: where the key this service still needs
+// is created. A keyless kind or a custom host has no such page and gets "".
+type ServiceHelp struct {
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+
 func NewSettings(cfg *settings.Store, version string) *SettingsService {
 	return &SettingsService{cfg: cfg, version: version}
+}
+
+// FetchModels is 从云端获取模型: the saved endpoint's own catalog, so a proxy or
+// gateway can answer for itself instead of every model being typed by hand.
+func (s *SettingsService) FetchModels(id string) ([]string, error) {
+	c := s.cfg.Get()
+	for _, list := range [][]settings.Provider{c.Translate, c.Dict, c.OCR, c.TTS} {
+		for _, p := range list {
+			if p.ID != id {
+				continue
+			}
+			prov, err := translate.New(p)
+			if err != nil {
+				return nil, err
+			}
+			lister, ok := prov.(translate.ModelLister)
+			if !ok {
+				return nil, errors.New("此服务不支持从云端获取模型")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			return lister.ListModels(ctx)
+		}
+	}
+	return nil, errors.New("服务不存在")
 }
 
 // Version is the build the user is running. The preferences page shows it next
 // to 检查更新, so a report of "已是最新" can be read against a version number.
 func (s *SettingsService) Version() string { return s.version }
 
+// ServiceHelp names the site where an empty key is created, so 缺少密钥 can
+// point at it instead of only saying the service cannot run yet.
+func (s *SettingsService) ServiceHelp(kind, baseURL string) ServiceHelp {
+	title, link := translate.HelpPage(kind, strings.TrimSpace(baseURL))
+	return ServiceHelp{Title: title, URL: link}
+}
+
+// LogFolder is 高级 → 日志's path. EasyDict shows 日志目录 with a reveal button;
+// the row is drawn from this string so the folder cannot drift from the one
+// the process actually writes.
+func (s *SettingsService) LogFolder() string { return logging.Dir() }
+
+// RevealLogs is 在 Finder 中显示: the folder holding transdict.log, created on
+// demand so the button works before anything has been logged.
+func (s *SettingsService) RevealLogs() error { return logging.Reveal() }
+
 func (s *SettingsService) Languages() []langs.Lang { return localizedLangs(langs.All()) }
+
+// VocabularyDirWritable is 生词本's 所选目录不可写。warning. A path that does not
+// exist yet stays usable: the notebook creates the folder on the first write,
+// so probing here must not treat "not created" as "cannot create".
+func (s *SettingsService) VocabularyDirWritable(dir string) bool {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return true
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return true
+	}
+	if !info.IsDir() {
+		return false
+	}
+	f, err := os.CreateTemp(dir, ".transdict-write-*")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	_ = f.Close()
+	_ = os.Remove(name)
+	return true
+}
 
 func (s *SettingsService) Get() settings.Config { return localizedProviders(s.cfg.Get()) }
 
@@ -57,8 +134,8 @@ func (s *SettingsService) CategoriesFor(context string) []settings.Label {
 	for _, c := range settings.CategoryOf(context) {
 		want[c] = true
 	}
-	// Speak() reads the main window's selection, so 朗读 is only configurable
-	// there; a float window that offered the checkbox would be lying.
+	// Speak() reads the translation window's selection, so 朗读 is only
+	// configurable there.
 	if context == settings.ContextMain {
 		want[settings.CatTTS] = true
 	}
@@ -89,6 +166,29 @@ func (s *SettingsService) ServiceTypes(category string) []settings.ServiceType {
 	return nil
 }
 
+// SetWindowOption is 窗口配置: one switch of one window, saved the moment it is
+// flipped so the next answer in that window already follows it.
+func (s *SettingsService) SetWindowOption(role, option string, on bool) error {
+	if _, ok := settings.DefaultWindowConfig()[role]; !ok {
+		return errors.New("未知窗口")
+	}
+	if option != "input" && option != "langBar" {
+		return errors.New("未知窗口配置")
+	}
+	_, err := s.cfg.Update(func(c *settings.Config) {
+		cfg := settings.MergeWindowConfig(c.WindowConfig, settings.DefaultWindowConfig())
+		opts := cfg[role]
+		if option == "input" {
+			opts.Input = on
+		} else {
+			opts.LangBar = on
+		}
+		cfg[role] = opts
+		c.WindowConfig = cfg
+	})
+	return err
+}
+
 // Save normalizes and persists the whole configuration. The settings page edits
 // a working copy, so a rejected save leaves the store untouched.
 func (s *SettingsService) Save(next settings.Config) error {
@@ -106,8 +206,43 @@ func (s *SettingsService) Save(next settings.Config) error {
 	// A hand-edited file can carry any number, and one that says "wait nine
 	// hours" would hang the panel rather than configure it.
 	next.Timeout = settings.ClampTimeout(next.Timeout)
-	next.FloatClose = settings.ClampFloatClose(next.FloatClose)
+	port, portErr := settings.NormalizeHTTPPort(next.HTTPPort)
+	if portErr != nil {
+		return portErr
+	}
+	next.HTTPPort = port
 	next.UpdateURL = strings.TrimSpace(next.UpdateURL)
+	next.VocabularyDir = strings.TrimSpace(next.VocabularyDir)
+	next.FirstLang = strings.TrimSpace(next.FirstLang)
+	next.SecondLang = strings.TrimSpace(next.SecondLang)
+	if next.FirstLang != "" && next.FirstLang == next.SecondLang {
+		return errors.New("第一语言不能与第二语言相同")
+	}
+	// The page can only send the three known names; anything else is a hand
+	// edit, and an unknown mode would silently stop 语种识别 from doing anything.
+	next.DetectOptimize = strings.TrimSpace(next.DetectOptimize)
+	switch next.DetectOptimize {
+	case settings.DetectOptimizeGoogle, settings.DetectOptimizeBaidu:
+	default:
+		next.DetectOptimize = settings.DetectOptimizeNone
+	}
+	// 菜单栏图标 is set from the tray, which this page has no control for: a save
+	// must carry whatever the menu chose instead of a copy the page loaded earlier.
+	next.MenuBarIconStyle = s.cfg.Get().MenuBarIconStyle
+	// 隐藏菜单栏图标 takes away the only always-visible entry of an accessory
+	// app: EasyDict refuses the save unless 输入翻译 or 划词翻译 can summon it.
+	if next.HideMenuBarIcon && !hasEntryShortcut(next) {
+		return errors.New("隐藏菜单栏图标前，请先给「输入翻译」或「划词翻译」设置快捷键")
+	}
+	// The Anki endpoint is a URL without a path; a trailing slash would be sent
+	// to AnkiConnect verbatim ("/") and answer 404.
+	next.AnkiEndpoint = strings.TrimRight(strings.TrimSpace(next.AnkiEndpoint), "/")
+	next.AnkiDeck = strings.TrimSpace(next.AnkiDeck)
+	next.AnkiModel = strings.TrimSpace(next.AnkiModel)
+	for i := range next.AnkiMappings {
+		next.AnkiMappings[i].Field = strings.TrimSpace(next.AnkiMappings[i].Field)
+		next.AnkiMappings[i].Template = strings.TrimSpace(next.AnkiMappings[i].Template)
+	}
 	// The update source is checked for a scheme here rather than left to fail
 	// later: a typo would otherwise surface as "无法连接更新源" forever, with no
 	// hint that the address never was one.
@@ -138,7 +273,11 @@ func (s *SettingsService) Save(next settings.Config) error {
 		c.TTS = next.TTS
 		c.SourceLang = next.SourceLang
 		c.TargetLang = next.TargetLang
+		c.FirstLang = next.FirstLang
+		c.SecondLang = next.SecondLang
+		c.DetectOptimize = next.DetectOptimize
 		c.Shortcuts = next.Shortcuts
+		c.AppShortcuts = settings.WithAppShortcutDefaults(next.AppShortcuts)
 		c.Selections = next.Selections
 		c.Theme = next.Theme
 		c.UILang = next.UILang
@@ -146,19 +285,81 @@ func (s *SettingsService) Save(next settings.Config) error {
 		c.Timeout = next.Timeout
 		c.UpdateURL = next.UpdateURL
 		c.AutoUpdate = next.AutoUpdate
+		c.IncludeBeta = next.IncludeBeta
 		c.TTSAuto = next.TTSAuto
-		c.MiniFont = next.MiniFont
-		c.KeepOpen = next.KeepOpen
-		c.FloatClose = next.FloatClose
+		c.DefaultTTS = next.DefaultTTS
+		c.ResultFont = next.ResultFont
 		c.SaveHistory = next.SaveHistory
-		c.Floating = next.Floating
+		c.VocabularyNotebook = next.VocabularyNotebook
+		c.VocabularyDir = next.VocabularyDir
+		c.AnkiEnabled = next.AnkiEnabled
+		c.AnkiEndpoint = next.AnkiEndpoint
+		c.AnkiDeck = next.AnkiDeck
+		c.AnkiModel = next.AnkiModel
+		c.AnkiMappings = append([]settings.AnkiMapping(nil), next.AnkiMappings...)
+		c.AutoPin = next.AutoPin
 		c.MouseSelect = next.MouseSelect
+		c.Blocklist = next.Blocklist
 		c.HideSameLang = next.HideSameLang
 		c.AutoCopy = next.AutoCopy
+		c.AutoCopySelect = next.AutoCopySelect
+		c.AutoCopyOCR = next.AutoCopyOCR
+		c.PreferYoudaoWord = next.PreferYoudaoWord
+		c.AutoPronounceWord = next.AutoPronounceWord
+		c.AutoShowQueryIcon = next.AutoShowQueryIcon
+		c.QueryIconClickOnly = next.QueryIconClickOnly
+		c.QueryIconMinLength = next.QueryIconMinLength
+		c.ClassicalMinLength = next.ClassicalMinLength
+		c.QueryIconExcludeLang = next.QueryIconExcludeLang
+		c.OCRTextNormalize = next.OCRTextNormalize
+		c.EnableYoudaoOCR = next.EnableYoudaoOCR
+		c.HideScreenshotTip = next.HideScreenshotTip
+		c.AutoQueryPaste = next.AutoQueryPaste
+		c.AutoQueryTyping = next.AutoQueryTyping
+		c.AutoQueryOCR = next.AutoQueryOCR
+		c.ClearInputOnQuery = next.ClearInputOnQuery
+		c.SelectTextOnOpen = next.SelectTextOnOpen
+		c.KeepLastOnNoSelection = next.KeepLastOnNoSelection
+		c.AutoRemoveComments = next.AutoRemoveComments
+		c.ReplaceNewlineSpace = next.ReplaceNewlineSpace
+		c.AutoSelectAllText = next.AutoSelectAllText
+		c.ReplaceCompatible = next.ReplaceCompatible
+		c.ForceCopy = next.ForceCopy
+		c.ForceCopyKind = next.ForceCopyKind
+		c.PreferAppleScriptAPI = next.PreferAppleScriptAPI
+		c.WindowConfig = settings.MergeWindowConfig(next.WindowConfig, settings.DefaultWindowConfig())
+		c.MaxHeightPct = next.MaxHeightPct
+		c.EnableHTTPServer = next.EnableHTTPServer
+		c.HTTPPort = next.HTTPPort
+		c.AutoWordSegment = next.AutoWordSegment
+		c.RemoveBooksExcerpt = next.RemoveBooksExcerpt
+		c.ShowGoogleLink = next.ShowGoogleLink
+		c.ShowAppleDictLink = next.ShowAppleDictLink
+		c.ShowEudicLink = next.ShowEudicLink
+		c.ShowQuickActionButton = next.ShowQuickActionButton
+		c.HideMainWindow = next.HideMainWindow
+		c.Pronunciation = next.Pronunciation
+		c.MarkdownRender = next.MarkdownRender
 		c.ShowInDock = next.ShowInDock
+		c.HideMenuBarIcon = next.HideMenuBarIcon
+		c.ShowOCRMenu = next.ShowOCRMenu
+		c.MenuBarIconStyle = next.MenuBarIconStyle
 		c.LoginItem = next.LoginItem
 	})
 	return err
+}
+
+// hasEntryShortcut reports whether a trivially reachable action still has a
+// global key: with the tray hidden, one of these is the way back into the app.
+func hasEntryShortcut(cfg settings.Config) bool {
+	for _, slot := range []string{settings.SlotInput, settings.SlotSelection} {
+		for _, accel := range cfg.Shortcuts[slot] {
+			if strings.TrimSpace(accel) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // normalize trims every user-typed field, fills a missing label from the
@@ -303,6 +504,27 @@ func (s *SettingsService) UpdateProvider(p settings.Provider) error {
 	return err
 }
 
+// SelectModel switches the model one service answers with, from its card's
+// model menu. Like EasyDict's menu it only stores the choice: the answer on
+// screen keeps the words the old model wrote, and the next query or 重试 asks
+// with the new one.
+func (s *SettingsService) SelectModel(providerID, model string) error {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return errors.New("模型不能为空")
+	}
+	_, err := s.cfg.Update(func(c *settings.Config) {
+		for _, list := range [][]settings.Provider{c.Translate, c.OCR, c.Dict, c.TTS} {
+			for i := range list {
+				if list[i].ID == providerID {
+					list[i].Model = model
+				}
+			}
+		}
+	})
+	return err
+}
+
 // RemoveProvider deletes a provider by id from every category, along with any
 // window selection still naming it.
 func (s *SettingsService) RemoveProvider(id string) error {
@@ -380,6 +602,35 @@ func (s *SettingsService) SetShortcut(slot, accel string) error {
 			return
 		}
 		c.Shortcuts[slot] = []string{accel}
+	})
+	return err
+}
+
+// SetAppShortcut rebinds one 快捷键 menu action; an empty accelerator leaves
+// the action in the menu without a key. The store notifies watchers, so the
+// menu items take the new key without a restart.
+func (s *SettingsService) SetAppShortcut(action, accel string) error {
+	if !settings.KnownAppAction(action) {
+		return errors.New("未知的应用内快捷键")
+	}
+	accel = strings.ToLower(strings.TrimSpace(accel))
+	if accel != "" && !looksLikeAccel(accel) {
+		return errors.New("格式应为 ctrl+alt+a 这类组合键")
+	}
+	if accel != "" {
+		// Two menu items on one key means AppKit runs whichever it meets first,
+		// which is not a choice the user made. A swap needs an unbind between.
+		for name, other := range settings.WithAppShortcutDefaults(s.cfg.Get().AppShortcuts) {
+			if name != action && other == accel {
+				return errors.New("该组合键已用于其他应用内快捷键")
+			}
+		}
+	}
+	_, err := s.cfg.Update(func(c *settings.Config) {
+		if c.AppShortcuts == nil {
+			c.AppShortcuts = map[string]string{}
+		}
+		c.AppShortcuts[action] = accel
 	})
 	return err
 }

@@ -47,6 +47,7 @@ type bingCredential struct {
 
 type bing struct {
 	baseURL string
+	cookie  string
 	httpc   *http.Client
 }
 
@@ -62,14 +63,16 @@ var (
 func init() {
 	Register(settings.ServiceType{
 		Kind: "bing", Name: "必应翻译",
-		Note: "免密钥，复用 Edge 翻译的临时令牌", Free: true,
+		Note: "免密钥；被拒绝（401）时可在下方填写 Cookie Key", Free: true,
 		Fields: []settings.Field{
 			{Key: settings.FieldBaseURL, Label: "接口地址（可留空）", Placeholder: bingAPIURL},
+			{Key: settings.FieldCookie, Label: "Cookie Key（可选）", Secret: true},
 		},
 		Default: settings.Provider{Enabled: true},
 	}, func(p settings.Provider) (Provider, error) {
 		return &bing{
 			baseURL: strings.TrimSpace(p.BaseURL),
+			cookie:  strings.TrimSpace(p.Get(settings.FieldCookie)),
 			httpc:   netp.Client(20 * time.Second),
 		}, nil
 	})
@@ -82,6 +85,15 @@ func (b *bing) apiEndpoint() string {
 		return strings.TrimRight(b.baseURL, "/")
 	}
 	return bingAPIURL
+}
+
+// withCookie adds the pasted browser cookie to a translation request. EasyDict
+// sends it on the translate POST but not on the page that mints the token, and
+// the same split keeps the token fetch cookieless.
+func (b *bing) withCookie(req *http.Request) {
+	if b.cookie != "" {
+		req.Header.Set("Cookie", b.cookie)
+	}
 }
 
 func bingLang(code string) string {
@@ -212,15 +224,43 @@ func (b *bing) Translate(ctx context.Context, text, sourceLang, targetLang strin
 	})
 }
 
+// errBingUnauthorized marks a stale bearer token. Unlike the web route's
+// anti-abuse 401, a fresh token fixes this one, so `once` retries it once
+// instead of leaving a dead credential cached for the rest of the window.
+var errBingUnauthorized = errors.New("必应翻译未授权")
+
 func (b *bing) once(ctx context.Context, q, src, dst string) (string, string, error) {
 	cred, err := b.credential(ctx)
 	if err != nil {
 		return "", "", err
 	}
+	out, det, err := b.call(ctx, cred, q, src, dst)
+	if errors.Is(err, errBingUnauthorized) {
+		// The token can expire before its advertised deadline; minting a new one
+		// is cheap and is what a retry after 请重试 would do anyway.
+		b.forget()
+		if fresh, ferr := b.credential(ctx); ferr == nil {
+			out, det, err = b.call(ctx, fresh, q, src, dst)
+		}
+	}
+	if errors.Is(err, errBingUnauthorized) {
+		err = errors.New("必应翻译未授权（401），请重试")
+	}
+	return out, det, err
+}
+
+func (b *bing) call(ctx context.Context, cred *bingCredential, q, src, dst string) (string, string, error) {
 	if cred.bearer != "" {
 		return b.onceAPI(ctx, cred.bearer, q, src, dst)
 	}
 	return b.onceWeb(ctx, cred, q, src, dst)
+}
+
+// forget drops the cached credential so the next query mints a new one.
+func (b *bing) forget() {
+	bingTokensMu.Lock()
+	delete(bingTokens, bingAuthURL+"|"+bingPageURL)
+	bingTokensMu.Unlock()
 }
 
 // onceAPI is the cognitive-translator route the Edge token unlocks.
@@ -244,6 +284,7 @@ func (b *bing) onceAPI(ctx context.Context, token, q, src, dst string) (string, 
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
+	b.withCookie(req)
 
 	resp, err := b.httpc.Do(req)
 	if err != nil {
@@ -254,6 +295,9 @@ func (b *bing) onceAPI(ctx context.Context, token, q, src, dst string) (string, 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return "", "", err
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return "", "", fmt.Errorf("%w: %s", errBingUnauthorized, truncate(string(raw)))
 	}
 	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("必应翻译 HTTP %d: %s", resp.StatusCode, truncate(string(raw)))
@@ -283,6 +327,7 @@ func (b *bing) onceWeb(ctx context.Context, cred *bingCredential, q, src, dst st
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Referer", cred.base+"/translator")
 	req.Header.Set("User-Agent", bingUA)
+	b.withCookie(req)
 
 	resp, err := b.httpc.Do(req)
 	if err != nil {
@@ -294,10 +339,20 @@ func (b *bing) onceWeb(ctx context.Context, cred *bingCredential, q, src, dst st
 	if err != nil {
 		return "", "", err
 	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return "", "", bingRefused()
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("必应翻译 HTTP %d: %s", resp.StatusCode, truncate(string(raw)))
 	}
 	return parseBingAnswer(raw)
+}
+
+// bingRefused explains the web route's anti-abuse 401 instead of quoting
+// {"ShowCaptcha":false}: there is no key to check, so a pasted browser Cookie
+// (EasyDict's Cookie Key field) or turning the service off are the only fixes.
+func bingRefused() error {
+	return errors.New("必应翻译临时拒绝了请求（401）。可在服务设置中填写 Cookie Key，或暂时关闭必应翻译。")
 }
 
 // parseBingAnswer reads the translation and the language it was written in.

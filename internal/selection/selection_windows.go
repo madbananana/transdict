@@ -6,6 +6,7 @@ import (
 	"errors"
 	"syscall"
 	"time"
+	"unicode/utf16"
 	"unsafe"
 )
 
@@ -20,10 +21,12 @@ var (
 const (
 	inputKeyboard = 1
 	keyUp         = 2
+	keyUnicode    = 4
 
 	vkControl = 0x11
 	vkC       = 0x43
 	vkV       = 0x56
+	vkA       = 0x41
 )
 
 // keybdInput mirrors KEYBDINPUT. The padding after Type is not decoration: the
@@ -68,8 +71,29 @@ const Pollable = false
 // FrontmostIsSelf is never reached while Pollable is false.
 func FrontmostIsSelf() bool { return false }
 
+// FrontmostBundleID has no portable answer here; nothing on this platform
+// rewrites a selection based on the source application.
+func FrontmostBundleID() string { return "" }
+
+// FocusedElementEditable is only consulted by the macOS ⌘A gesture.
+func FocusedElementEditable() bool { return false }
+
+// TrackFrontmostApps is macOS-only: without an accessibility read there is no
+// reason to hand the keyboard anywhere.
+func TrackFrontmostApps() {}
+
+// ReactivateLastOther has no equivalent here; 划词 goes through the clipboard.
+func ReactivateLastOther() bool { return false }
+
 // Copy synthesizes ctrl+C for the foreground window.
 func Copy() error { return chord(vkC) }
+
+// CopyMenu has no platform equivalent worth carrying: a foreign app's menu is
+// not reachable without UI Automation, so 强制取词 runs the chord route here.
+func CopyMenu() error { return ErrUnsupported }
+
+// BrowserSelectedText is macOS-only: no browser scripting interface exists here.
+func BrowserSelectedText() (string, bool) { return "", false }
 
 func chord(vk uint16) error {
 	events := []inputEvent{key(vkControl, true), key(vk, true), key(vk, false), key(vkControl, false)}
@@ -91,6 +115,31 @@ func chord(vk uint16) error {
 
 // Paste synthesizes ctrl+V for the foreground window.
 func Paste() error { return chord(vkV) }
+
+// SelectAll synthesizes ctrl+A for the foreground window.
+func SelectAll() error { return chord(vkA) }
+
+// TypeText types the answer with Unicode scan codes instead of pasting it,
+// which is 兼容模式替换.
+func TypeText(text string) error {
+	size := int32(unsafe.Sizeof(inputEvent{}))
+	for _, unit := range utf16.Encode([]rune(text)) {
+		for _, down := range []bool{true, false} {
+			e := inputEvent{Type: inputKeyboard, Kb: keybdInput{Scan: unit, Flags: keyUnicode}}
+			if !down {
+				e.Kb.Flags |= keyUp
+			}
+			r, _, callErr := procSendInput.Call(1, uintptr(unsafe.Pointer(&e)), uintptr(size))
+			if r != 1 {
+				if callErr != nil && callErr != syscall.Errno(0) {
+					return callErr
+				}
+				return errors.New("替换：模拟键盘输入失败")
+			}
+		}
+	}
+	return nil
+}
 
 // ChangeCount returns -1 while the number is meaningless, which is until this
 // process has opened the clipboard at least once.

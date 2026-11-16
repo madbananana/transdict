@@ -6,6 +6,7 @@ package query
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +45,15 @@ type Request struct {
 	// DictionaryOnly keeps a word lookup from firing every translator, matching
 	// Easydict's 词典模式.
 	DictionaryOnly bool `json:"dictionaryOnly,omitempty"`
+	// Service names one provider kind to run alone, which is how the local HTTP
+	// API answers an explicit serviceType. It bypasses the window selection:
+	// the caller asked for Google, not for whatever this window runs.
+	Service string `json:"service,omitempty"`
+	// Replaceable records that the query came from a live selection in an
+	// editable field, so a result card may offer 替换 (EasyDict's
+	// showReplaceButton). It is decided where the selection is read, because by
+	// the time the answer lands the field may no longer be focused.
+	Replaceable bool `json:"replaceable,omitempty"`
 
 	Image []byte `json:"-"`
 }
@@ -56,6 +66,10 @@ type Response struct {
 	Mode       string `json:"mode"`
 	SourceText string `json:"sourceText"`
 	Detected   string `json:"detected"`
+	// SourceLang is the language the answer was read as, when the query named
+	// one — a picker choice or a 识别为 correction. Empty means the services
+	// detected it, and 重试 may detect again.
+	SourceLang string `json:"sourceLang,omitempty"`
 	TargetLang string `json:"targetLang"`
 	ImageURL   string `json:"cropDataURL,omitempty"`
 
@@ -65,6 +79,10 @@ type Response struct {
 
 	ElapsedMs int64  `json:"elapsedMs"`
 	Error     string `json:"error,omitempty"`
+
+	// Replaceable lets every result card offer 替换: clicking it puts that card's
+	// answer back over the selection the query was made from.
+	Replaceable bool `json:"replaceable,omitempty"`
 
 	// Partial marks a first sketch sent as soon as the text exists — for a
 	// screenshot, right after OCR. The translations arrive in the final
@@ -83,6 +101,36 @@ type Response struct {
 // the next query rather than requiring a restart.
 type Engine struct {
 	cfg *settings.Store
+	// stops holds the cancel of every service still streaming, keyed by the
+	// window and the service id. 停止生成 cancels one card; the rest of the
+	// query keeps answering, as EasyDict's stop button does.
+	stops sync.Map // string -> *stopHandle
+}
+
+// stopHandle makes the registry entry comparable so a finished run cannot
+// remove the handle a retried run has already stored under the same key.
+type stopHandle struct{ cancel context.CancelFunc }
+
+func stopKey(context, provider string) string { return context + "\x00" + provider }
+
+// StopTranslate cancels the streaming answer of one service in one window. It
+// reports whether that service was still streaming: a card that already landed
+// has nothing left to stop.
+func (e *Engine) StopTranslate(context, provider string) bool {
+	h, ok := e.stops.Load(stopKey(context, provider))
+	if !ok {
+		return false
+	}
+	h.(*stopHandle).cancel()
+	return true
+}
+
+func (e *Engine) armStop(context, provider string, handle *stopHandle) {
+	e.stops.Store(stopKey(context, provider), handle)
+}
+
+func (e *Engine) disarmStop(context, provider string, handle *stopHandle) {
+	e.stops.CompareAndDelete(stopKey(context, provider), handle)
 }
 
 func New(cfg *settings.Store) *Engine { return &Engine{cfg: cfg} }
@@ -168,7 +216,10 @@ func chosen(cfg settings.Config, context, category string) []settings.Provider {
 	enabled := map[string]settings.Provider{}
 	var all []settings.Provider
 	for _, p := range cfg.List(category) {
-		if !p.Enabled {
+		// 始终关闭 is EasyDict's usage status for a service the user keeps in the
+		// list but never wants queried automatically. An explicit API call still
+		// names its kind and bypasses this.
+		if !p.Enabled || p.Get(settings.FieldUsageStatus) == settings.UsageAlwaysOff {
 			continue
 		}
 		enabled[p.ID] = p
@@ -182,6 +233,17 @@ func chosen(cfg settings.Config, context, category string) []settings.Provider {
 		}
 	}
 	if len(picked) > 0 {
+		// 始终开启 joins the window's list even when this window never ticked
+		// it, which is the point of the setting.
+		seen := make(map[string]bool, len(picked))
+		for _, p := range picked {
+			seen[p.ID] = true
+		}
+		for _, p := range all {
+			if p.Get(settings.FieldUsageStatus) == settings.UsageAlwaysOn && !seen[p.ID] {
+				picked = append(picked, p)
+			}
+		}
 		return picked
 	}
 	return all
@@ -200,8 +262,25 @@ func plan(cfg settings.Config, context, category string) []settings.Provider {
 	return out
 }
 
-// declares reports whether a window runs a stage at all. 迷你窗 shows a single
-// line of translation and 鼠标取词 wants a dictionary entry, so letting every
+// pickKind is the one provider an API caller named. The caller asked for a
+// specific service, so the per-window checkboxes do not apply; a kind that is
+// missing or not configured answers nothing, which the HTTP layer reports as an
+// unsupported service rather than as an empty translation.
+func pickKind(cfg settings.Config, category, kind string) []settings.Provider {
+	for _, p := range cfg.List(category) {
+		if p.Kind != kind {
+			continue
+		}
+		if p.Enabled && serviceReady(category, p) {
+			return []settings.Provider{p}
+		}
+		return nil
+	}
+	return nil
+}
+
+// declares reports whether a window runs a stage at all. 翻译并替换 shows a
+// single line of translation and 鼠标取词 wants a dictionary entry, so letting every
 // context drive every stage spends requests on results the window cannot show —
 // and a paragraph of OCR text is not a word a dictionary can look up.
 func declares(context, category string) bool {
@@ -297,24 +376,48 @@ func (e *Engine) run(ctx context.Context, req Request, onText func(*Response)) *
 
 	if len(req.Image) > 0 {
 		res.OCR = e.OCRStage(ctx, cfg, req)
-		res.SourceText = PickText(res.OCR)
+		res.SourceText = OCRText(cfg, res.OCR)
 	} else {
 		res.SourceText = strings.TrimSpace(req.Text)
 	}
 	if res.SourceText == "" {
 		// An image that asked nothing of any engine is a settings question, and
-		// annotate has the configuration to say so; 未识别到文字 would blame the
-		// picture for work the app never did.
-		if res.Error == "" && (len(req.Image) == 0 || len(res.OCR) > 0) {
+		// annotate has the configuration to say so; the empty-result line would
+		// blame the picture for work the app never did. A recognized nothing is
+		// answered with EasyDict's guidance: the usual fix is picking the
+		// recognition language by hand.
+		if res.Error == "" && len(req.Image) == 0 {
 			res.Error = "未识别到文字"
+		} else if res.Error == "" && len(res.OCR) > 0 {
+			res.Error = "OCR 结果为空。⚠️ 请手动选择识别语言再次尝试。"
 		}
+		res.ElapsedMs = time.Since(start).Milliseconds()
+		return res
+	}
+	// A recognized link is its own answer: EasyDict returns early with the URL
+	// in the box, highlighted and clickable, instead of translating it into
+	// gibberish. Only OCR does this — a URL typed into the box is still the
+	// user's question.
+	if len(req.Image) > 0 && WholeURL(res.SourceText) {
 		res.ElapsedMs = time.Since(start).Milliseconds()
 		return res
 	}
 	// Easydict answers 中文 typed into a 中文 target with 英文, not by echoing the
 	// input. Detection has to wait until OCR has produced the text, hence this
 	// point rather than withLangs.
-	if flip := samePairTarget(res.SourceText, req.SourceLang, req.TargetLang); flip != "" {
+	detected := detectedText(cfg, res.SourceText)
+	if req.TargetLang == langs.Auto || req.SourceLang == langs.Auto {
+		if better, ok := e.optimizeDetection(ctx, cfg, res.SourceText); ok {
+			detected = better
+			res.Detected = better
+		}
+	}
+	if req.TargetLang == langs.Auto {
+		// 自动选择 is resolved from the text: the pair the app is for is
+		// Chinese↔English, and everything else answers in Chinese.
+		req.TargetLang = autoTargetDetected(cfg, detected)
+		res.TargetLang = req.TargetLang
+	} else if flip := samePairTargetDetected(cfg, detected, req.SourceLang, req.TargetLang); flip != "" {
 		req.TargetLang = flip
 		res.TargetLang = flip
 	}
@@ -326,6 +429,13 @@ func (e *Engine) run(ctx context.Context, req Request, onText func(*Response)) *
 		partial.Dict = nil
 		partial.ElapsedMs = time.Since(start).Milliseconds()
 		onText(&partial)
+	}
+
+	if len(req.Image) > 0 && !cfg.AutoQueryOCR {
+		// 图片 OCR 后自动查询 off: recognition is the whole answer in the panel,
+		// and 全部重新查询 turns it into a translation when the user is ready.
+		res.ElapsedMs = time.Since(start).Milliseconds()
+		return res
 	}
 
 	// The two stages are independent: waiting for the slowest translator before
@@ -375,17 +485,74 @@ func withLangs(req Request, cfg settings.Config) Request {
 // Chinese as the target, Chinese text translates to English rather than coming
 // back unchanged (Google echoes the input when sl and tl are the same). Only
 // Han without kana counts as Chinese, so Japanese keeps its 中文 target.
-func samePairTarget(text, sourceLang, targetLang string) string {
+// samePairTarget catches the half of the pair the user already typed in: a
+// 中文 target on 中文 text would translate a language into itself, so the
+// answer flips to the other side of 第一语言/第二语言.
+func samePairTarget(cfg settings.Config, text, sourceLang, targetLang string) string {
+	return samePairTargetDetected(cfg, detectedText(cfg, text), sourceLang, targetLang)
+}
+
+// samePairTargetDetected is the same question with the language already named,
+// which is how 语种识别 optimization feeds a service's answer in.
+func samePairTargetDetected(cfg settings.Config, detected, sourceLang, targetLang string) string {
 	if sourceLang != langs.Auto {
 		return ""
 	}
-	if targetLang != "zh-CN" && targetLang != "zh-TW" {
+	first, second := userPair(cfg)
+	if !sameLanguage(targetLang, second) {
 		return ""
 	}
-	if looksChinese(text) {
-		return "en"
+	if sameLanguage(detected, second) {
+		return first
 	}
 	return ""
+}
+
+// autoTarget resolves 自动选择 from the pair the user reads: text already in
+// 第一语言 answers in 第二语言, and everything else answers in 第一语言. The
+// defaults (English and 简体中文) reproduce Easydict's Chinese↔English swap.
+func autoTarget(cfg settings.Config, text string) string {
+	return autoTargetDetected(cfg, detectedText(cfg, text))
+}
+
+// autoTargetDetected resolves 自动选择 from an already named language.
+func autoTargetDetected(cfg settings.Config, detected string) string {
+	first, second := userPair(cfg)
+	if first == second {
+		return first
+	}
+	if sameLanguage(detected, first) {
+		return second
+	}
+	return first
+}
+
+// detectedText is what the system recogniser and the reader's pair decide on
+// their own, before 语种识别 optimization has a say.
+func detectedText(cfg settings.Config, text string) string {
+	first, second := userPair(cfg)
+	return langs.DetectWithHints(text, first, second)
+}
+
+// userPair reads 第一语言/第二语言, filling in the app's usual pair when the
+// settings predate them or a field was left blank.
+func userPair(cfg settings.Config) (string, string) {
+	first := strings.TrimSpace(cfg.FirstLang)
+	if first == "" {
+		first = "en"
+	}
+	second := strings.TrimSpace(cfg.SecondLang)
+	if second == "" {
+		second = "zh-CN"
+	}
+	return first, second
+}
+
+// sameLanguage treats the two Chinese scripts as one language: 繁体 text must
+// not decide that a 简体 target is already the language it was written in.
+func sameLanguage(a, b string) bool {
+	zh := func(c string) bool { return c == "zh-CN" || c == "zh-TW" }
+	return a == b || (zh(a) && zh(b))
 }
 
 // A Chinese name inside an English paragraph is not a Chinese paragraph: OCR
@@ -422,7 +589,33 @@ func (e *Engine) OCRStage(ctx context.Context, cfg settings.Config, req Request)
 		}(i, p)
 	}
 	wg.Wait()
-	return out
+	return withYoudaoFallback(ctx, cfg, out, req.Image)
+}
+
+// youdaoFallbackOCR is the keyless Youdao image call behind 有道 OCR 识别.
+// A var so tests can answer the request without the network.
+var youdaoFallbackOCR = ocr.YoudaoWebOCR
+
+// withYoudaoFallback is Easydict's 有道 OCR 识别: when none of the configured
+// services read a character, the picture gets one more try through Youdao's
+// public endpoint. The outcome joins the others, so the OCR card still shows
+// which service supplied the text — and when the fallback fails too, every
+// provider's error stays visible.
+func withYoudaoFallback(ctx context.Context, cfg settings.Config, out []ocr.Outcome, img []byte) []ocr.Outcome {
+	if !cfg.EnableYoudaoOCR || len(img) == 0 || PickText(out) != "" {
+		return out
+	}
+	stage, cancel := stageCtx(ctx, netp.Timeout(ocrTimeout))
+	defer cancel()
+	start := time.Now()
+	blocks, err := youdaoFallbackOCR(stage, img)
+	res := ocr.Outcome{Provider: "youdao-ocr", Label: "有道 OCR", Blocks: blocks,
+		ElapsedMs: time.Since(start).Milliseconds()}
+	if err != nil {
+		res.Blocks = nil
+		res.Error = netp.Reason(err)
+	}
+	return append(out, res)
 }
 
 // recognize builds and calls one OCR provider. Exported through RetryOCR so a
@@ -466,6 +659,9 @@ func headword(text string) bool {
 
 func (e *Engine) dictStage(ctx context.Context, cfg settings.Config, req Request, res *Response) []dict.Result {
 	providers := plan(cfg, req.Context, settings.CatDict)
+	if req.Service != "" {
+		providers = pickKind(cfg, settings.CatDict, req.Service)
+	}
 	out := make([]dict.Result, len(providers))
 	var wg sync.WaitGroup
 	for i, p := range providers {
@@ -490,12 +686,26 @@ func (e *Engine) explain(ctx context.Context, p settings.Provider, text, src, ds
 	if meta, ok := dict.Meta(p.Kind); ok {
 		r.Site = meta.SiteURL(text, src, dst)
 	}
+	r.OpenURL = dictOpenURL(p.Kind, text)
 	return r
+}
+
+// dictOpenURL is where a local dictionary looks a word up. Apple's dictionary
+// registers dict://, which EasyDict uses for its 在苹果词典中打开 link; the web
+// dictionaries already declare a page in Site.
+func dictOpenURL(kind, text string) string {
+	if kind != "apple" {
+		return ""
+	}
+	return "dict://" + url.PathEscape(strings.TrimSpace(text))
 }
 
 func (e *Engine) translateStage(ctx context.Context, cfg settings.Config, req Request, res *Response,
 	start time.Time, onPart func(*Response)) []translate.Result {
 	providers := plan(cfg, req.Context, settings.CatTranslate)
+	if req.Service != "" {
+		providers = pickKind(cfg, settings.CatTranslate, req.Service)
+	}
 	// A service with no route for this pair is left out rather than drawn as a
 	// red card: 有道 does not translate 日语 into 韩语, and saying so beside two
 	// services that answered only adds noise. A construction failure still shows
@@ -505,6 +715,12 @@ func (e *Engine) translateStage(ctx context.Context, cfg settings.Config, req Re
 		if impl, err := translate.New(p); err == nil {
 			if checker, ok := impl.(translate.PairChecker); ok &&
 				!checker.SupportsPair(req.SourceLang, req.TargetLang) {
+				continue
+			}
+			// 翻译/句子分析/查单词 switches bound what an AI service answers; a
+			// query none of them covers should leave it out, not fail it.
+			if typer, ok := impl.(translate.QueryTyper); ok &&
+				!typer.SupportsQuery(res.SourceText, req.SourceLang, req.TargetLang) {
 				continue
 			}
 		}
@@ -519,11 +735,44 @@ func (e *Engine) translateStage(ctx context.Context, cfg settings.Config, req Re
 		wg.Add(1)
 		go func(i int, p settings.Provider) {
 			defer wg.Done()
-			out[i] = e.render(ctx, p, res.SourceText, req)
-			if out[i].Text == "" && out[i].Error == "" {
-				out[i].Error = "返回空译文"
+			// Each service gets its own cancel so 停止生成 can end one card
+			// without cutting the answer the others are still producing.
+			pctx, pcancel := context.WithCancel(ctx)
+			defer pcancel()
+			handle := &stopHandle{cancel: pcancel}
+			e.armStop(req.Context, p.ID, handle)
+			defer e.disarmStop(req.Context, p.ID, handle)
+			var lastEmit time.Time
+			// A streamed answer updates the card it will end up in, without
+			// marking that service done: the progress line and 重试 state still
+			// belong to a service that has not finished. Emitting is throttled
+			// because SSE delivers tokens, and a snapshot per token would spend
+			// the whole window redrawing.
+			emit := func(partial string) {
+				mu.Lock()
+				out[i].Provider, out[i].Label = p.ID, p.Label
+				out[i].Text = partial
+				out[i].ElapsedMs = time.Since(start).Milliseconds()
+				if onPart != nil && time.Since(lastEmit) >= 80*time.Millisecond {
+					lastEmit = time.Now()
+					onPart(translationSnapshot(res, providers, out, done, start))
+				}
+				mu.Unlock()
 			}
+			r := e.render(pctx, p, res.SourceText, req, cfg.FirstLang, emit)
+			// 停止生成 is not a failure: keep the words that already reached
+			// the card and let the service end as if it had finished there.
+			// The partial text lives in out under the lock the emit path uses.
+			if pctx.Err() == context.Canceled {
+				mu.Lock()
+				r.Text = out[i].Text
+				mu.Unlock()
+				r.Error = ""
+				r.ElapsedMs = time.Since(start).Milliseconds()
+			}
+			finishAnswer(&r)
 			mu.Lock()
+			out[i] = r
 			done[i] = true
 			// A slow service must not hold the others hostage: each answer is
 			// sent as soon as it lands, in provider order so a card never moves.
@@ -545,6 +794,32 @@ func (e *Engine) translateStage(ctx context.Context, cfg settings.Config, req Re
 	return out
 }
 
+// WholeURL reports whether the text is nothing but one web link, which is
+// EasyDict's isURL check on recognized text: a scheme is required, so
+// "example.com" typed by hand is still a question.
+func WholeURL(text string) bool {
+	u, err := url.Parse(strings.TrimSpace(text))
+	if err != nil {
+		return false
+	}
+	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
+// finishAnswer classifies an empty translation. A service that replied with
+// nothing is EasyDict's noResult warning — but only for one that cannot stream:
+// a streamer that stayed silent is a fault, keeps the red mark and 重试. A
+// transport failure is always a fault and keeps the button.
+func finishAnswer(r *translate.Result) {
+	if r.Text == "" && r.Error == "" {
+		r.Error = "返回空译文"
+	}
+	r.Warning = r.Text == "" && !r.Stream && noResultError(r.Error)
+}
+
+func noResultError(msg string) bool {
+	return strings.Contains(msg, "空译文") || strings.Contains(msg, "没有输出译文")
+}
+
 // translationSnapshot carries the answers that are already in, without the
 // fields the dictionary stage may still be writing. A partial response is
 // replaced by the next one, so it must never be recorded as the final answer.
@@ -564,13 +839,25 @@ func translationSnapshot(res *Response, providers []settings.Provider, out []tra
 	}
 	for i := range out {
 		if !done[i] {
-			// Reserve the row so a later answer cannot push an already visible
-			// card down when its own (earlier-ordered) service finishes.
-			snap.Translate = append(snap.Translate, translate.Result{
+			// A streamed answer is already readable, so its row keeps the text
+			// instead of the loading dots. A service that has said nothing yet
+			// still reserves its row so a later answer cannot push a visible card
+			// down when an earlier-ordered service finishes.
+			if !done[i] && strings.TrimSpace(out[i].Text) != "" {
+				row := out[i]
+				row.Streaming = true
+				snap.Translate = append(snap.Translate, row)
+				continue
+			}
+			row := translate.Result{
 				Provider: providers[i].ID,
 				Label:    providers[i].Label,
 				Pending:  true,
-			})
+			}
+			// The model menu is part of the card from the first frame: a service
+			// that is still thinking already has a chosen model.
+			row.Model, row.Models = translate.ModelInfo(providers[i])
+			snap.Translate = append(snap.Translate, row)
 			continue
 		}
 		snap.Translate = append(snap.Translate, out[i])
@@ -581,23 +868,41 @@ func translationSnapshot(res *Response, providers []settings.Provider, out []tra
 	return snap
 }
 
-func (e *Engine) render(ctx context.Context, p settings.Provider, text string, req Request) translate.Result {
+func (e *Engine) render(ctx context.Context, p settings.Provider, text string, req Request,
+	firstLang string, onText func(string)) translate.Result {
 	impl, err := translate.New(p)
 	if err != nil {
 		return translate.Result{Provider: p.ID, Label: p.Label, Error: err.Error()}
 	}
+	// A custom prompt may say ${{firstLanguage}}, which lives in the app config
+	// rather than on the service row.
+	if aware, ok := impl.(translate.FirstLanguage); ok {
+		impl = aware.WithFirstLanguage(firstLang)
+	}
 	stage, cancel := stageCtx(ctx, netp.Timeout(textTimeout))
 	defer cancel()
-	r := translate.RunQuery(stage, p.ID, p.Label, impl, text, req.SourceLang, req.TargetLang)
+	r := translate.RunQueryStream(stage, p.ID, p.Label, impl, text, req.SourceLang, req.TargetLang, onText)
 	if strings.TrimSpace(req.Prompt) != "" {
 		if instructed, ok := impl.(translate.Promptable); ok {
-			r = translate.RunQuery(stage, p.ID, p.Label,
-				instructed.WithPrompt(req.Prompt), text, req.SourceLang, req.TargetLang)
+			r = translate.RunQueryStream(stage, p.ID, p.Label,
+				instructed.WithPrompt(req.Prompt), text, req.SourceLang, req.TargetLang, onText)
 		}
 	}
 	if meta, ok := translate.Meta(p.Kind); ok {
 		r.Markdown = meta.Markdown
 		r.Site = meta.SiteURL(text, autoName(req.SourceLang), req.TargetLang)
+	}
+	r.Model, r.Models = translate.ModelInfo(p)
+	// 参见 👉 belongs to a refused key or a spent quota: EasyDict's promptURL
+	// is the page that fixes exactly that, and no other failure has one.
+	if r.Error != "" {
+		base := p.BaseURL
+		if base == "" {
+			if meta, ok := translate.Meta(p.Kind); ok {
+				base = meta.Default.BaseURL
+			}
+		}
+		r.PromptTitle, r.PromptURL = translate.PromptFor(p.Kind, base, r.Error)
 	}
 	return r
 }
@@ -633,6 +938,10 @@ func FirstTranslation(res *Response) string {
 func (e *Engine) Speak(text, lang string, slow bool) tts.Result {
 	cfg := e.cfg.Get()
 	providers := plan(cfg, settings.ContextMain, settings.CatTTS)
+	providers = defaultVoice(providers, cfg.DefaultTTS)
+	if cfg.PreferYoudaoWord {
+		providers = preferYoudaoWord(providers, text, lang)
+	}
 	if len(providers) == 0 {
 		return tts.Result{Error: "没有可用的朗读服务"}
 	}
@@ -660,6 +969,59 @@ func (e *Engine) Speak(text, lang string, slow bool) tts.Result {
 	return tts.Result{Error: "没有可用的朗读服务"}
 }
 
+// defaultVoice is 默认 TTS 服务: the chosen provider is tried first, and the rest
+// keep their configured order so a broken voice still falls back.
+func defaultVoice(providers []settings.Provider, id string) []settings.Provider {
+	if id == "" {
+		return providers
+	}
+	out := make([]settings.Provider, 0, len(providers))
+	for _, p := range providers {
+		if p.ID == id {
+			out = append(out, p)
+		}
+	}
+	for _, p := range providers {
+		if p.ID != id {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// preferYoudaoWord is 英语单词优先使用有道发音: 有道's dictionary recording reads a
+// single English word better than a generic voice, so for that one case it goes
+// first. A sentence, a CJK word or a missing 有道 service leaves the order alone.
+func preferYoudaoWord(providers []settings.Provider, text, lang string) []settings.Provider {
+	if !strings.HasPrefix(lang, "en") || !singleWord(text) {
+		return providers
+	}
+	for i, p := range providers {
+		if p.Kind != settings.ProviderKind("youdao") {
+			continue
+		}
+		moved := make([]settings.Provider, 0, len(providers))
+		moved = append(moved, p)
+		moved = append(moved, providers[:i]...)
+		moved = append(moved, providers[i+1:]...)
+		return moved
+	}
+	return providers
+}
+
+func singleWord(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	for _, r := range text {
+		if unicode.IsSpace(r) || (!unicode.IsLetter(r) && r != '-' && r != '\'') {
+			return false
+		}
+	}
+	return true
+}
+
 func stageCtx(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if parent == nil {
 		parent = context.Background()
@@ -680,4 +1042,15 @@ func PickText(outcomes []ocr.Outcome) string {
 		}
 	}
 	return strings.TrimSpace(best)
+}
+
+// OCRText is the text a screenshot produced, after 启用 OCR 文本规范化 if it is
+// on. The recogniser's own blocks stay untouched so the OCR section can still
+// show what each service read.
+func OCRText(cfg settings.Config, outcomes []ocr.Outcome) string {
+	text := PickText(outcomes)
+	if cfg.OCRTextNormalize {
+		return ocr.NormalizeText(text)
+	}
+	return text
 }

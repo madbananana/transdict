@@ -9,6 +9,16 @@
             <string>transdict</string>
         <key>CFBundleIdentifier</key>
             <string>app.transdict.desktop</string>
+        <!-- AppKit localizes the menu entries it injects (AutoFill, dictation,
+             window tiling) from the bundle's declared localizations; without
+             these the bar mixes Chinese items with English system ones. -->
+        <key>CFBundleDevelopmentRegion</key>
+            <string>en</string>
+        <key>CFBundleLocalizations</key>
+            <array>
+                <string>en</string>
+                <string>zh-Hans</string>
+            </array>
         <key>CFBundleURLTypes</key>
             <array>
                 <dict>

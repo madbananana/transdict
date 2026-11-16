@@ -2,7 +2,13 @@
 // cases that used to depend on which window happened to call it are checked here.
 import { autoReadAnswer } from './autoread.ts'
 
-type Case = [string, Parameters<typeof autoReadAnswer>[0], string, unknown]
+type Case = [
+  string,
+  Parameters<typeof autoReadAnswer>[0],
+  string,
+  unknown,
+  Parameters<typeof autoReadAnswer>[2]?,
+]
 
 const cases: Case[] = [
   ['不自动朗读', { sourceText: 'hello', translate: [{ text: '你好' }] }, 'off', null],
@@ -27,11 +33,28 @@ const cases: Case[] = [
   ['译文缺少语言时退回识别语言', { detected: 'en', translate: [{ text: '你好' }] }, 'target',
     { text: '你好', lang: 'en' }],
   ['没有任何译文时返回空', { targetLang: 'zh-CN', translate: [{ error: '超时' }] }, 'target', null],
+
+  // 查询英语单词后自动播放发音: only a single English word, and only while
+  // 自动朗读 itself is off, so the two switches never speak over each other.
+  ['英语单词自动发音', { sourceText: ' hello ', detected: 'en' }, 'off',
+    { text: 'hello', lang: 'en' }, { pronounceEnglishWord: true }],
+  ['带撇号或连字符的单词', { sourceText: "don't", detected: 'en' }, 'off',
+    { text: "don't", lang: 'en' }, { pronounceEnglishWord: true }],
+  ['句子不按单词发音', { sourceText: 'hello world', detected: 'en' }, 'off', null,
+    { pronounceEnglishWord: true }],
+  ['中文不按单词发音', { sourceText: '你好', detected: 'zh-CN' }, 'off', null,
+    { pronounceEnglishWord: true }],
+  ['数字不按单词发音', { sourceText: '42', detected: 'en' }, 'off', null,
+    { pronounceEnglishWord: true }],
+  ['开关关闭时不发音', { sourceText: 'hello', detected: 'en' }, 'off', null],
+  ['自动朗读优先于单词发音', { sourceText: 'hello', detected: 'en', targetLang: 'zh-CN',
+    translate: [{ text: '你好' }] }, 'target', { text: '你好', lang: 'zh-CN' },
+    { pronounceEnglishWord: true }],
 ]
 
 let failures = 0
-for (const [name, res, mode, want] of cases) {
-  const got = autoReadAnswer(res, mode)
+for (const [name, res, mode, want, opts] of cases) {
+  const got = autoReadAnswer(res, mode, opts)
   if (JSON.stringify(got) !== JSON.stringify(want)) {
     failures++
     console.error(`FAIL ${name}\n  得到 ${JSON.stringify(got)}\n  期望 ${JSON.stringify(want)}`)

@@ -8,7 +8,7 @@
     "build:dev": "tsc && vite build --minify false --mode development",
     "build": "tsc && vite build --mode production",
     "preview": "vite preview",
-    "test": "node src/markdown.test.ts && node src/copy.test.ts && node src/autoread.test.ts"
+    "test": "node src/markdown.test.ts && node src/copy.test.ts && node src/autoread.test.ts && node src/links.test.ts && node src/speech.test.ts && node src/swap.test.ts && node src/detect.test.ts && node src/appkeys.test.ts"
   },
   "dependencies": {
     "@wailsio/runtime": "3.0.0",

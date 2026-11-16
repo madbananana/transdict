@@ -16,7 +16,10 @@ var appIcon []byte
 //go:embed build/trayicon.png
 var trayIcon []byte
 
+//go:embed build/trayicon-square.png
+var trayIconSquare []byte
+
 // version is set at build time: -ldflags "-X main.version=…"
 var version = "dev"
 
-func main() { cli.Main(version, assets, appIcon, trayIcon) }
+func main() { cli.Main(version, assets, appIcon, trayIcon, trayIconSquare) }

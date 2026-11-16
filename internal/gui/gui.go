@@ -6,7 +6,10 @@ package gui
 
 import (
 	"context"
+	"image"
+	"net/http"
 	"sync"
+	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -14,6 +17,7 @@ import (
 	"transdict/internal/capture"
 	"transdict/internal/history"
 	"transdict/internal/query"
+	"transdict/internal/selection"
 	"transdict/internal/settings"
 	"transdict/internal/shortcut"
 )
@@ -30,10 +34,24 @@ const (
 	// reload — a stylesheet attribute is the whole change — so the panels follow
 	// the menu bar the moment it is picked.
 	EventTheme = "app:theme"
+	// EventConfig announces a saved setting. 窗口配置 lives on each window's own
+	// copy of the store, so a toggle has to reach the window already on screen.
+	EventConfig = "app:config"
+	// EventMenuAction carries a 快捷键 menu click. The menu bar belongs to the
+	// app rather than to a webview, so Go picks the query window that holds the
+	// keyboard and tells that one window which action to run.
+	EventMenuAction = "app:menu-action"
 )
 
-// Busy is a progress line addressed to one window role, so the panel's
-// "翻译中…" never leaks into the floating window.
+// MenuAction names one 快捷键 menu item and the window it belongs to. The menu
+// and the in-window keys answer the same action names, in EasyDict's
+// ShortcutAction spelling.
+type MenuAction struct {
+	Target string `json:"target"`
+	Action string `json:"action"`
+}
+
+// Busy is a progress line addressed to the translation window.
 type Busy struct {
 	Target string `json:"target"`
 	Text   string `json:"text"`
@@ -42,12 +60,12 @@ type Busy struct {
 // Window roles, mirrored by the frontend hash routes.
 const (
 	WindowMain     = "main"
-	WindowFloat    = "float"
-	WindowMini     = "mini"
+	WindowIcon     = "queryicon"
 	WindowInput    = "input"
 	WindowCapture  = "capture"
 	WindowSettings = "settings"
-	WindowHistory  = "history"
+	WindowOCR      = "ocr"
+	WindowLogs     = "logs"
 )
 
 type Service struct {
@@ -62,13 +80,16 @@ type Service struct {
 
 	mu       sync.Mutex
 	session  string
-	overlays []*application.WebviewWindow
+	overlays []captureOverlay
 	lastCrop []byte
 	last     *query.Response
-	// panelLast is what the main window is showing, which is not always the
-	// newest answer: a 划词 result goes to the floating panel, and 详情 promotes
-	// it here without making the panel adopt every passing selection.
-	panelLast *query.Response
+	// requestedPage is the settings tab an opener (关于, 历史) asked for. The
+	// window reads it when it mounts and a command names it when it is already
+	// open, because the click can land before or after the webview exists.
+	requestedPage string
+	// fitGen numbers the translation window's height animation: a newer fit
+	// cancels the one still running, so two answers cannot fight over the frame.
+	fitGen uint64
 	// runs numbers the latest query in each context, and runCancel stops the one
 	// it replaced: an answer that arrives after the user has asked something else
 	// must not overwrite the newer answer.
@@ -77,12 +98,43 @@ type Service struct {
 	// silent marks the pending capture as 静音 OCR: the crop is recognized and
 	// copied, and no result window opens.
 	silent bool
+	// ocrOnly marks the pending capture as 截图 OCR: the panel shows the text and
+	// stops there instead of translating it.
+	ocrOnly bool
+	// lastOCR keeps the newest recognized answer for the OCR 窗口 entry, which
+	// reopens it even after a later text query replaced s.last.
+	lastOCR *query.Response
+	// ocrPinned is the OCR 窗口's own pin. EasyDict's OCRWindow keeps it on the
+	// window: unpinned, losing key hides the preview; pinned, it stays on top.
+	ocrPinned bool
 	// watchCancel stops the 自动划词 poll; nil means it is not running.
 	watchCancel context.CancelFunc
 	// shortcutProblems is what the last native registration refused. The OS
 	// reports a conflict when the key is registered — before any window exists
 	// to show it — so the answer is kept until the 快捷键 page asks.
 	shortcutProblems []shortcut.Problem
+	// maxPct is the 窗口最大高度百分比 already applied; the store is written on
+	// every window move, and only a change is worth re-capping the windows for.
+	maxPct int
+	// http is the running local API, nil while 启用 HTTP 服务 is off, and
+	// httpPort remembers the port it bound so a change restarts it.
+	http     *http.Server
+	httpPort string
+	// notebook holds the response ids already appended to the 生词本: a retry
+	// answers under the same id and must not write the query twice.
+	notebook map[string]bool
+	// iconText is what the 划词查询图标 will ask about when clicked, iconHide
+	// is the timer that takes the icon away if the user ignores it, iconRect is
+	// the button's frame, which the click tap compares against, and iconMoved is
+	// when the pointer was last checked against it. iconScroll is the wheel
+	// movement seen so far, and iconKeyTimer is the beat a plain key press gets.
+	iconText     string
+	iconEditable bool
+	iconHide     *time.Timer
+	iconRect     image.Rectangle
+	iconMoved    time.Time
+	iconScroll   float64
+	iconKeyTimer *time.Timer
 }
 
 func New(cfg *settings.Store, shots *capture.Store, history *history.Store, version string) *Service {
@@ -121,9 +173,19 @@ func (s *Service) ShortcutProblems() []shortcut.Problem {
 //wails:ignore
 func (s *Service) Attach(app *application.App) {
 	s.wails = app
+	// The record of who had the keyboard before us is built from activations,
+	// so the observer has to be in place before the first window opens.
+	selection.TrackFrontmostApps()
+	// The 划词查询图标 never takes activation, so its button has to answer
+	// the click that arrives while another app is frontmost.
+	acceptFirstMouseInViews()
 	s.cfg.Watch(s.syncMouseSelect)
 	s.syncMouseSelect(s.cfg.Get())
+	s.cfg.Watch(func(settings.Config) { s.wails.Event.Emit(EventConfig) })
 	s.cfg.Watch(s.syncPin)
+	s.cfg.Watch(s.syncMaxHeight)
+	s.cfg.Watch(s.syncHTTPServer)
+	s.syncHTTPServer(s.cfg.Get())
 	// Wails re-shows the windows it still holds when the dock icon is clicked,
 	// but a red-button click destroys one; the translation window is the app's
 	// face, so a dock click has to rebuild it instead of doing nothing.

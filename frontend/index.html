@@ -3,7 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <link rel="stylesheet" href="/style.css" />
+    <!-- The screenshot overlay paints on top of the frozen frame. Between its
+         first paint and the image arriving, it must be black like the window,
+         never the light theme's paper colour; its own chrome is dark too. -->
+    <script>
+      if (location.hash.indexOf('#/capture') === 0) {
+        document.documentElement.dataset.theme = 'dark'
+        document.documentElement.classList.add('capture-boot')
+      }
+    </script>
     <title>Transdict</title>
   </head>
   <body>

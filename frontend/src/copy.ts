@@ -80,6 +80,10 @@ export function plainEntry(entry: Entry): string {
       if (sense) lines.push(sense)
     }
   }
+  for (const w of entry.related ?? []) {
+    const sense = [w.value, (w.conts ?? []).join('；')].filter(Boolean).join(' ')
+    if (sense) lines.push(sense)
+  }
   for (const e of entry.examples ?? []) {
     if (e.source) lines.push(e.source)
     if (e.translation) lines.push(e.translation)
@@ -87,15 +91,72 @@ export function plainEntry(entry: Entry): string {
   return lines.join('\n')
 }
 
+// escapeHTML mirrors what Anki expects of a field: entities first, then line
+// breaks, so a meaning written on several lines keeps its shape in the note.
+function escapeHTML(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/\n/g, '<br>')
+}
+
+// entryHTML is the dictionary's own markup when it has any (an MDX article
+// does); a structured entry becomes its plain text with the line breaks kept.
+function entryHTML(entry: Entry): string {
+  if (entry.text && /<[a-z][\s\S]*>/i.test(entry.text)) return entry.text.trim()
+  return escapeHTML(plainEntry(entry))
+}
+
+/** ankiNote is the material 添加到 Anki hands over: the same text the card
+ * shows, split into the ten values EasyDict's field templates can name. */
+export function ankiNote(entries: Entry[], translation: string) {
+  const text = entries.map(plainEntry).filter(Boolean).join('\n\n')
+  return {
+    word: entries.map((e) => e.word).filter(Boolean).join('，'),
+    // A dictionary-only answer has no machine translation; the entry text is
+    // what the card sent as the back before the other variables existed.
+    translation: (translation ?? '').trim() || text,
+    definition: entries
+      .flatMap((e) => (e.definitions ?? []).map((d) =>
+        [d.pos, (d.meanings ?? []).join('；')].filter(Boolean).join(' ')))
+      .filter(Boolean)
+      .join('\n'),
+    phonetic: entries
+      .flatMap((e) => phones(e).map((p) => (p.lang ? `${p.lang} ${p.text}` : p.text)))
+      .join(' '),
+    exchange: entries.flatMap((e) => e.exchange ?? []).filter(Boolean).join('\n'),
+    related: entries
+      .flatMap((e) => (e.related ?? []).map((w) =>
+        [w.value, (w.conts ?? []).join('；')].filter(Boolean).join(' ')))
+      .filter(Boolean)
+      .join('\n'),
+    fullResult: text,
+    dictionaryText: text,
+    dictionaryHTML: entries.map(entryHTML).filter(Boolean).join('<br><br>'),
+    etymology: '',
+  }
+}
+
+/** firstResult is ⌘⇧J's payload: the first translation the panel shows, without
+ * the service label 复制全文 puts in front of each one. */
+export function firstResult(res: Response): string {
+  for (const x of res.translate ?? []) if (!x.error && x.text) return x.text.trim()
+  return ''
+}
+
 /** copyAll gathers the answer in reading order, so one paste carries the source
  * and every service that answered. */
 export function copyAll(res: Response): string {
   const parts: string[] = []
   if (res.sourceText) parts.push(res.sourceText)
-  for (const x of res.translate ?? []) if (!x.error && x.text) parts.push(`${x.label}: ${x.text.trim()}`)
+  // Same order as the panel: dictionaries above the translations.
   for (const d of res.dict ?? []) {
     const lines = (d.entries ?? []).map(plainEntry).filter(Boolean)
     if (lines.length) parts.push(`${d.label}: ${lines.join('\n\n')}`)
   }
+  for (const x of res.translate ?? []) if (!x.error && x.text) parts.push(`${x.label}: ${x.text.trim()}`)
   return parts.join('\n\n')
 }

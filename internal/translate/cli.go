@@ -25,10 +25,11 @@ type cliProvider struct {
 	Binary string
 	Model  string
 	Prompt string
+	Effort string
 
 	// args builds the argv tail; input builds the stdin payload, and a nil
 	// input means the CLI takes the whole prompt as an argument instead.
-	args  func(model, instruction, text string) []string
+	args  func(model, instruction, text, effort string) []string
 	input func(model, instruction, text string) string
 	// run is swappable so a test can assert argv without a real binary.
 	run func(ctx context.Context, path string, args []string, stdin string) (string, error)
@@ -36,11 +37,13 @@ type cliProvider struct {
 
 // cliSpec is one supported binary's calling convention.
 type cliSpec struct {
-	kind        string
-	name        string
-	note        string
-	binary      string
-	defaultArgs func(model, instruction, text string) []string
+	kind   string
+	name   string
+	note   string
+	binary string
+	// fields are the provider-specific controls beyond 可执行文件/模型/附加指令.
+	fields      []settings.Field
+	defaultArgs func(model, instruction, text, effort string) []string
 	defaultPipe func(model, instruction, text string) string
 }
 
@@ -52,18 +55,22 @@ var cliSpecs = []cliSpec{
 	{
 		kind: "claude-cli", name: "Claude Code CLI", binary: "claude",
 		note: "调用本机 claude（-p 打印模式），复用已有登录或 ANTHROPIC_API_KEY",
+		fields: []settings.Field{
+			{Key: settings.FieldEffort, Label: "思考程度", Options: claudeEffortOptions()},
+		},
 		// The instruction goes to --system-prompt so the pasted text stays
 		// byte-for-byte what the user selected.
-		defaultArgs: func(model, instruction, text string) []string {
+		defaultArgs: func(model, instruction, text, effort string) []string {
 			args := []string{"-p", "--output-format", "text", "--system-prompt", instruction}
-			return append(args, cliModelFlag("-m", model)...)
+			args = append(args, cliModelFlag("-m", model)...)
+			return append(args, claudeEffortFlag(effort)...)
 		},
 		defaultPipe: func(model, instruction, text string) string { return text },
 	},
 	{
 		kind: "codex-cli", name: "Codex CLI", binary: "codex",
 		note: "调用本机 codex exec，复用 ChatGPT 登录；- 从标准输入读取",
-		defaultArgs: func(model, instruction, text string) []string {
+		defaultArgs: func(model, instruction, _, _ string) []string {
 			args := []string{"exec", "--skip-git-repo-check", "-"}
 			return append(args, cliModelFlag("-m", model)...)
 		},
@@ -73,7 +80,7 @@ var cliSpecs = []cliSpec{
 		kind: "copilot-cli", name: "Copilot CLI", binary: "copilot",
 		note: "调用本机 copilot -p（GitHub Copilot 命令行），也可指向 gh 的 copilot 入口",
 		// -p only takes the prompt as an argument, so no stdin payload.
-		defaultArgs: func(model, instruction, text string) []string {
+		defaultArgs: func(model, instruction, text, _ string) []string {
 			args := []string{"-p", cliJoinPrompt(model, instruction, text), "--no-color"}
 			return append(args, cliModelFlag("--model", model)...)
 		},
@@ -82,13 +89,15 @@ var cliSpecs = []cliSpec{
 
 func init() {
 	for _, spec := range cliSpecs {
+		fields := []settings.Field{{Key: "binary", Label: "可执行文件", Placeholder: spec.binary}}
+		fields = append(fields, spec.fields...)
+		fields = append(fields,
+			settings.Field{Key: settings.FieldModel, Label: "模型", Placeholder: "留空使用 CLI 默认"},
+			settings.Field{Key: settings.FieldPrompt, Label: "附加指令", Text: true},
+		)
 		Register(settings.ServiceType{
 			Kind: spec.kind, Name: spec.name, Note: spec.note, Multi: true, Markdown: true, Prompt: true,
-			Fields: []settings.Field{
-				{Key: "binary", Label: "可执行文件", Placeholder: spec.binary},
-				{Key: settings.FieldModel, Label: "模型", Placeholder: "留空使用 CLI 默认"},
-				{Key: settings.FieldPrompt, Label: "附加指令", Text: true},
-			},
+			Fields:  fields,
 			Default: settings.Provider{Extra: map[string]string{"binary": spec.binary}},
 		}, func(p settings.Provider) (Provider, error) {
 			binary := strings.TrimSpace(p.Extra["binary"])
@@ -100,6 +109,7 @@ func init() {
 				Binary: binary,
 				Model:  p.Model,
 				Prompt: p.Prompt,
+				Effort: strings.TrimSpace(p.Extra[settings.FieldEffort]),
 				args:   spec.defaultArgs,
 				input:  spec.defaultPipe,
 			}
@@ -147,7 +157,7 @@ func (c *cliProvider) Translate(ctx context.Context, text, sourceLang, targetLan
 		return "", "", fmt.Errorf("%s 无法执行 %s：%v", c.Name, c.Binary, err)
 	}
 
-	args := c.args(c.Model, instruction, text)
+	args := c.args(c.Model, instruction, text, c.Effort)
 	pipe := ""
 	if c.input != nil {
 		pipe = c.input(c.Model, instruction, text)
@@ -252,6 +262,29 @@ func cliModelFlag(flag, model string) []string {
 		return nil
 	}
 	return []string{flag, model}
+}
+
+// claudeEffortOptions mirrors EasyDict's service.claude_code.effort labels; an
+// empty value means the CLI default, so no flag is passed at all.
+func claudeEffortOptions() []settings.FieldOption {
+	return []settings.FieldOption{
+		{Value: "", Label: "默认（沿用 CLI 默认）"},
+		{Value: "low", Label: "低"},
+		{Value: "medium", Label: "中"},
+		{Value: "high", Label: "高"},
+		{Value: "xhigh", Label: "极高"},
+		{Value: "max", Label: "最大"},
+	}
+}
+
+// claudeEffortFlag is an allow-list of the levels `claude --effort` accepts, so
+// a hand-edited config cannot inject an arbitrary argv token.
+func claudeEffortFlag(level string) []string {
+	switch level {
+	case "low", "medium", "high", "xhigh", "max":
+		return []string{"--effort", level}
+	}
+	return nil
 }
 
 // cliJoinPrompt folds the instruction and the source text into one prompt for

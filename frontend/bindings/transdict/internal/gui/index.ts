@@ -10,6 +10,9 @@ export {
 
 export type {
     Busy,
+    CaptureArea,
+    OCRPreview,
     PermissionState,
+    ServiceHelp,
     UpdateReport
 } from "./models.js";

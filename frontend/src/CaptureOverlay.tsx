@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Service } from '../bindings/transdict/internal/gui/index.js'
+import { Service, SettingsService, type CaptureArea } from '../bindings/transdict/internal/gui/index.js'
 import { t } from './i18n'
 
 type Rect = { x: number; y: number; w: number; h: number }
@@ -29,8 +29,15 @@ export default function CaptureOverlay({ frame }: { frame: number }) {
   const [failed, setFailed] = useState(false)
   const [rect, setRect] = useState<Rect | null>(null)
   const [working, setWorking] = useState('')
+  const [hideTip, setHideTip] = useState(false)
+  // 上一次截图区域 arrives in the frame's own pixels; the D key turns it into
+  // the CSS rectangle the marquee is drawn in.
+  const [lastArea, setLastArea] = useState<CaptureArea | null>(null)
   const drag = useRef<Drag | null>(null)
   const imgRef = useRef<HTMLImageElement | null>(null)
+  // abandoned stops the one-second D preview: Esc during that second must not
+  // let the delayed commit land on a capture the user already dismissed.
+  const abandoned = useRef(false)
   // rectRef follows the marquee without waiting for a render: the mouseup that
   // ends a fast drag lands before React has re-rendered the last mousemove.
   const rectRef = useRef<Rect | null>(null)
@@ -39,12 +46,33 @@ export default function CaptureOverlay({ frame }: { frame: number }) {
     setRect(r)
   }
 
-  const cancel = useCallback(() => {
-    void Service.Cancel()
+  // armed is the one-second D preview: the last area is drawn and the overlay
+  // stays fully usable. Any new gesture disarms it instead of leaving a delayed
+  // commit aimed at a rectangle the user has already moved on from.
+  const [armed, setArmed] = useState(false)
+  const armTimer = useRef<number | null>(null)
+  const disarm = useCallback(() => {
+    if (armTimer.current !== null) {
+      window.clearTimeout(armTimer.current)
+      armTimer.current = null
+    }
+    setArmed(false)
   }, [])
+  useEffect(() => () => {
+    if (armTimer.current !== null) {
+      window.clearTimeout(armTimer.current)
+    }
+  }, [])
+
+  const cancel = useCallback(() => {
+    abandoned.current = true
+    disarm()
+    void Service.Cancel()
+  }, [disarm])
 
   const commit = useCallback(
     (r: Rect) => {
+      disarm()
       const el = imgRef.current
       if (!el || !el.naturalWidth || r.w < MIN_SIZE || r.h < MIN_SIZE) {
         cancel()
@@ -57,14 +85,53 @@ export default function CaptureOverlay({ frame }: { frame: number }) {
       void Service.Commit(frame, Math.round(r.x * k), Math.round(r.y * k), Math.round(r.w * k), Math.round(r.h * k))
         .catch(() => cancel())
     },
-    [frame, cancel],
+    [frame, cancel, disarm],
   )
 
   useEffect(() => {
     Service.FrameDataURL(frame)
-      .then(setFrameURL)
+      .then((url) => {
+        if (url) {
+          setFrameURL(url)
+        } else {
+          setFailed(true)
+        }
+      })
       .catch(() => setFailed(true))
+    void Service.LastCaptureArea(frame).then((a) => setLastArea(a ?? null))
+    void SettingsService.Get().then((cfg) => setHideTip(!!cfg?.hideScreenshotTip))
   }, [frame])
+
+  // The window stays hidden until this reports back, so the first thing the
+  // user sees is the frozen frame rather than a white webview. A capture that
+  // failed still reports: the error message is the overlay's job too.
+  useEffect(() => {
+    if (loaded || failed) {
+      void Service.CaptureReady(frame).catch(() => undefined)
+    }
+  }, [loaded, failed, frame])
+
+  // 选择上一次截图区域: D reuses the rectangle of the last capture on this
+  // display. It stays up for a second before it commits, the way EasyDict does,
+  // so the user sees what is about to be taken — without the dimmed busy layer,
+  // which made that second read as a stall. Esc (or any new drag) is the way out.
+  const reuseLast = useCallback(() => {
+    const el = imgRef.current
+    if (!lastArea || !el || !el.naturalWidth || !el.clientWidth) {
+      return
+    }
+    const k = el.naturalWidth / el.clientWidth
+    const r = { x: lastArea.x / k, y: lastArea.y / k, w: lastArea.w / k, h: lastArea.h / k }
+    place(r)
+    setArmed(true)
+    armTimer.current = window.setTimeout(() => {
+      armTimer.current = null
+      setArmed(false)
+      if (!abandoned.current) {
+        commit(r)
+      }
+    }, 1000)
+  }, [lastArea, commit])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -74,6 +141,9 @@ export default function CaptureOverlay({ frame }: { frame: number }) {
       } else if (e.key === 'Enter' && rect) {
         e.preventDefault()
         commit(rect)
+      } else if ((e.key === 'd' || e.key === 'D') && !e.metaKey && !e.ctrlKey && !e.altKey && lastArea && loaded && !working) {
+        e.preventDefault()
+        reuseLast()
       }
     }
     const onUp = () => {
@@ -92,14 +162,21 @@ export default function CaptureOverlay({ frame }: { frame: number }) {
       // any delay here sits in front of OCR and every translator.
       commit(cur)
     }
+    // 右键取消 is EasyDict's second exit beside Esc; without it a right-click
+    // would only swallow the menu and leave the frozen screen up.
+    const onContext = (e: MouseEvent) => {
+      e.preventDefault()
+      cancel()
+    }
     window.addEventListener('keydown', onKey)
     window.addEventListener('mouseup', onUp)
-    window.addEventListener('contextmenu', (e) => e.preventDefault())
+    window.addEventListener('contextmenu', onContext)
     return () => {
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('mouseup', onUp)
+      window.removeEventListener('contextmenu', onContext)
     }
-  }, [rect, cancel, commit])
+  }, [rect, cancel, commit, lastArea, reuseLast])
 
   const move = (e: React.MouseEvent) => {
     const d = drag.current
@@ -156,11 +233,13 @@ export default function CaptureOverlay({ frame }: { frame: number }) {
 
   return (
     <div
-      className="capture"
+      className={armed ? 'capture armed' : 'capture'}
       onMouseDown={(e) => {
         if (e.button !== 0 || !loaded || working) {
           return
         }
+        // A fresh drag replaces the D preview rather than racing its timer.
+        disarm()
         drag.current = { kind: 'new', from: { x: e.clientX, y: e.clientY } }
         place(null)
       }}
@@ -185,6 +264,7 @@ export default function CaptureOverlay({ frame }: { frame: number }) {
               return
             }
             e.stopPropagation()
+            disarm()
             drag.current = { kind: 'move', start: rect, from: { x: e.clientX, y: e.clientY } }
           }}
         >
@@ -201,6 +281,7 @@ export default function CaptureOverlay({ frame }: { frame: number }) {
                   return
                 }
                 e.stopPropagation()
+                disarm()
                 drag.current = { kind: 'resize', edge: h.edge, start: rect, from: { x: e.clientX, y: e.clientY } }
               }}
             />
@@ -227,15 +308,18 @@ export default function CaptureOverlay({ frame }: { frame: number }) {
           failed capture. */}
       {!loaded && !failed && <div className="busy">{t('正在准备截图…')}</div>}
       {!failed && working && <div className="busy">{working}</div>}
-      {loaded && !working && (
+      {loaded && !working && !hideTip && (
         <div className="hint">
           <span>{t('拖拽框选文字区域，松开即翻译')}</span>
           <span>
             <kbd>Enter</kbd> {t('翻译')}
           </span>
           <span>
-            <kbd>Esc</kbd> {t('取消')}
+            <kbd>Esc</kbd> {t('或右键取消')}
           </span>
+          {/* The D tip only exists once a rectangle does; EasyDict words it as
+              one sentence rather than a key label. */}
+          {lastArea && <span>{t('单击 D 键选择上一次截图区域')}</span>}
           {/* Once a box exists the action bar beside it owns the buttons; before
               that, Esc is the only exit the overlay offers. */}
           {!rect && (

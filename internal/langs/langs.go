@@ -12,7 +12,8 @@ type Lang struct {
 
 var table = []Lang{
 	{Auto, "自动检测"},
-	{"zh-CN", "简体中文"}, {"zh-TW", "繁体中文"}, {"en", "英语"}, {"ja", "日语"},
+	{"zh-CN", "简体中文"}, {"zh-TW", "繁体中文"}, {Classical, "古文"},
+	{"en", "英语"}, {"ja", "日语"},
 	{"ko", "韩语"}, {"fr", "法语"}, {"de", "德语"}, {"es", "西班牙语"}, {"ru", "俄语"},
 	{"it", "意大利语"}, {"pt", "葡萄牙语"}, {"th", "泰语"}, {"vi", "越南语"},
 	{"ar", "阿拉伯语"}, {"nl", "荷兰语"}, {"pl", "波兰语"}, {"tr", "土耳其语"},
@@ -30,11 +31,13 @@ var table = []Lang{
 
 func All() []Lang { return table }
 
-// Targets is All without the detection sentinel, for target-language pickers.
+// Targets is All without the two codes no service accepts as output: the
+// detection sentinel and the classical tag, which is a genre the recogniser can
+// name rather than a language to translate into.
 func Targets() []Lang {
-	out := make([]Lang, 0, len(table)-1)
+	out := make([]Lang, 0, len(table)-2)
 	for _, l := range table {
-		if l.Code != Auto {
+		if l.Code != Auto && l.Code != Classical {
 			out = append(out, l)
 		}
 	}

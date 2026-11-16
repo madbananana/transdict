@@ -13,10 +13,18 @@ import (
 	"github.com/kbinani/screenshot"
 )
 
-// captureDisplays uses the system screencapture tool because the portable
-// capture path below returns images at backing-store *point* resolution on
-// Retina displays, which halves the pixel density fed to OCR.
+// captureDisplays freezes every active display. The native ImageIO pass below
+// keeps native pixel resolution; the screencapture fallback exists because it
+// reports a missing 屏幕录制 permission as a tool error rather than nil images,
+// and because the portable capture path returns point resolution on Retina.
 func captureDisplays() ([]Frame, error) {
+	// One ImageIO pass beats per-display screencapture processes and a Go PNG
+	// decode by ~300ms. It fails without 屏幕录制 permission, which is exactly
+	// when the tool path reports the actionable error.
+	if frames, err := captureFast(); err == nil {
+		return frames, nil
+	}
+
 	n := screenshot.NumActiveDisplays()
 	if n == 0 {
 		return nil, errors.New("capture: no active displays")

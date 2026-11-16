@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -70,10 +71,53 @@ func TestMergeOffersANewServiceOnlyOnce(t *testing.T) {
 		t.Errorf("seed = %d, want %d", cfg.Seed, defaultSeed)
 	}
 
-	stamped := []byte(`{"seed":1,"translate":[{"id":"translate-youdao-08ec","kind":"youdao","enabled":true}]}`)
+	stamped := []byte(`{"seed":` + strconv.Itoa(defaultSeed) +
+		`,"translate":[{"id":"translate-youdao-08ec","kind":"youdao","enabled":true}]}`)
 	cfg = merge(mustDecode(t, stamped), presentOf(stamped))
 	if hasKind(cfg.Translate, "bing") {
 		t.Error("已经打过印记的文件不应再被补齐，删除过的服务不能复活")
+	}
+}
+
+// Shortcuts now default to Easydict's. A file that still carries the old
+// combinations is upgraded once, while a key the user chose survives even when
+// it happens to equal an old default.
+func TestMergeMovesOldShortcutDefaultsOnce(t *testing.T) {
+	old := []byte(`{"shortcuts":{"input":["alt+shift+d"],"selection":["alt+shift+s"],
+		"capture":["alt+shift+t"],"silentOcr":["alt+shift+g"],"mini":["alt+shift+m"]}}`)
+	cfg := merge(mustDecode(t, old), presentOf(old))
+	want := map[string]string{
+		SlotInput:     "alt+a",
+		SlotSelection: "alt+d",
+		SlotCapture:   "alt+s",
+		SlotSilentOCR: "alt+shift+s",
+	}
+	for slot, accel := range want {
+		if got := cfg.Accel(slot); len(got) != 1 || got[0] != accel {
+			t.Errorf("%s = %v, want [%s]", slot, got, accel)
+		}
+	}
+	// The retired mini and floating window bindings are dropped instead of
+	// being carried into a file this build cannot act on.
+	if got := cfg.Accel("mini"); len(got) != 0 {
+		t.Errorf("mini = %v, want removed", got)
+	}
+	if got := cfg.Accel("clipboardFloat"); len(got) != 0 {
+		t.Errorf("clipboardFloat = %v, want removed", got)
+	}
+	if cfg.ShortcutSeed != defaultShortcutSeed {
+		t.Errorf("shortcutSeed = %d, want %d", cfg.ShortcutSeed, defaultShortcutSeed)
+	}
+
+	// Stamped files keep whatever they hold — including the old defaults if the
+	// user picks them again after the move.
+	stamped := []byte(`{"shortcutSeed":1,"shortcuts":{"input":["alt+shift+d"],"selection":["ctrl+alt+1"]}}`)
+	cfg = merge(mustDecode(t, stamped), presentOf(stamped))
+	if got := cfg.Accel(SlotInput); len(got) != 1 || got[0] != "alt+shift+d" {
+		t.Errorf("input = %v, want 用户自己的组合键", got)
+	}
+	if got := cfg.Accel(SlotSelection); len(got) != 1 || got[0] != "ctrl+alt+1" {
+		t.Errorf("selection = %v, want 用户自己的组合键", got)
 	}
 }
 
@@ -121,16 +165,6 @@ func TestMergeKeepsADeliberatelyEmptiedCategory(t *testing.T) {
 }
 
 func TestMergeDefaultsABoolOnlyWhenItsKeyIsAbsent(t *testing.T) {
-	// floating defaults to true, so a file written before the switch existed
-	// must not silently turn 悬浮窗 off — but a file that says false means it.
-	old := merge(mustDecode(t, []byte(`{"theme":"dark"}`)), presentOf([]byte(`{"theme":"dark"}`)))
-	if !old.Floating {
-		t.Error("缺少 floating 键时应当采用默认值 true")
-	}
-	off := merge(mustDecode(t, []byte(`{"floating":false}`)), presentOf([]byte(`{"floating":false}`)))
-	if off.Floating {
-		t.Error("文件写明 false 时不得改回 true")
-	}
 	// The same rule for 记录查询历史: old files keep logging, an explicit
 	// false is the user's choice and must survive a load.
 	saved := merge(mustDecode(t, []byte(`{"theme":"dark"}`)), presentOf([]byte(`{"theme":"dark"}`)))
@@ -141,6 +175,15 @@ func TestMergeDefaultsABoolOnlyWhenItsKeyIsAbsent(t *testing.T) {
 	if quiet.SaveHistory {
 		t.Error("文件写明不记录历史时不得改回 true")
 	}
+	// 优先使用 AppleScript API also starts on; a file that says off keeps it off.
+	scripted := merge(mustDecode(t, []byte(`{"theme":"dark"}`)), presentOf([]byte(`{"theme":"dark"}`)))
+	if !scripted.PreferAppleScriptAPI {
+		t.Error("缺少 preferAppleScriptAPI 键时应当采用默认值 true")
+	}
+	plain := merge(mustDecode(t, []byte(`{"preferAppleScriptAPI":false}`)), presentOf([]byte(`{"preferAppleScriptAPI":false}`)))
+	if plain.PreferAppleScriptAPI {
+		t.Error("文件写明关闭 AppleScript 取词时不得改回 true")
+	}
 }
 
 func TestStoreRoundTripKeepsNewFields(t *testing.T) {
@@ -149,7 +192,6 @@ func TestStoreRoundTripKeepsNewFields(t *testing.T) {
 		c.MouseSelect = true
 		c.LoginItem = true
 		c.Timeout = 45
-		c.FloatClose = 30
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -163,29 +205,144 @@ func TestStoreRoundTripKeepsNewFields(t *testing.T) {
 	if next.Timeout != 45 {
 		t.Errorf("超时 = %d, want 45", next.Timeout)
 	}
-	if next.FloatClose != 30 {
-		t.Errorf("悬浮窗收起 = %d, want 30", next.FloatClose)
+}
+
+// 禁止名单 ships with 钥匙串访问 blocked, and a file written before the list
+// existed still gets that default; an explicitly emptied list stays empty.
+func TestMergeShipsTheBlocklistDefaultOnlyWhenAbsent(t *testing.T) {
+	old := merge(mustDecode(t, []byte(`{"theme":"dark"}`)), presentOf([]byte(`{"theme":"dark"}`)))
+	if len(old.Blocklist) != 1 || old.Blocklist[0].BundleID != "com.apple.keychainaccess" {
+		t.Errorf("缺少 blocklist 时 = %+v, want 钥匙串访问", old.Blocklist)
+	}
+
+	empty := merge(mustDecode(t, []byte(`{"blocklist":[]}`)), presentOf([]byte(`{"blocklist":[]}`)))
+	if len(empty.Blocklist) != 0 {
+		t.Errorf("文件写明空名单时 = %+v, want 空", empty.Blocklist)
+	}
+
+	// An emptied list must be written out, not omitted: the next launch would
+	// read the missing key as "before the setting existed" and put 钥匙串访问 back.
+	data, err := json.Marshal(Config{})
+	if err != nil {
+		t.Fatalf("序列化配置: %v", err)
+	}
+	if !presentOf(data)("blocklist") {
+		t.Errorf("空名单没有写进配置: %s", data)
+	}
+
+	if !(Config{Blocklist: old.Blocklist}).BlocksApp("com.apple.keychainaccess") {
+		t.Error("默认名单没挡住钥匙串访问")
+	}
+	if (Config{}).BlocksApp("") {
+		t.Error("空标识不该被挡住")
 	}
 }
 
-// The delay is a number, so zero cannot mean "new field" the way a bool can:
-// the key's absence is what marks a file written before the setting existed.
-func TestMergeDefaultsFloatCloseOnlyWhenAbsent(t *testing.T) {
+func TestMergeDefaultsMaxHeightPercentOnlyWhenAbsent(t *testing.T) {
 	old := merge(mustDecode(t, []byte(`{"theme":"dark"}`)), presentOf([]byte(`{"theme":"dark"}`)))
-	if old.FloatClose != 12 {
-		t.Errorf("缺少 floatClose 时 = %d, want the default 12", old.FloatClose)
+	if old.MaxHeightPct != 100 {
+		t.Errorf("缺少 maxHeightPct 时 = %d, want 100", old.MaxHeightPct)
 	}
-	kept := merge(mustDecode(t, []byte(`{"floatClose":30}`)), presentOf([]byte(`{"floatClose":30}`)))
-	if kept.FloatClose != 30 {
-		t.Errorf("文件写明 30 时 = %d, want 30", kept.FloatClose)
+	kept := merge(mustDecode(t, []byte(`{"maxHeightPct":60}`)), presentOf([]byte(`{"maxHeightPct":60}`)))
+	if kept.MaxHeightPct != 60 {
+		t.Errorf("文件写明 60 时 = %d, want 60", kept.MaxHeightPct)
 	}
-	low := merge(mustDecode(t, []byte(`{"floatClose":0}`)), presentOf([]byte(`{"floatClose":0}`)))
-	if low.FloatClose != MinFloatClose {
-		t.Errorf("0 秒 = %d, want the %d s floor", low.FloatClose, MinFloatClose)
+}
+
+func TestMergeDefaultsHTTPPortOnlyWhenAbsent(t *testing.T) {
+	old := merge(mustDecode(t, []byte(`{"theme":"dark"}`)), presentOf([]byte(`{"theme":"dark"}`)))
+	if old.HTTPPort != DefaultHTTPPort {
+		t.Errorf("缺少 httpPort 时 = %q, want %q", old.HTTPPort, DefaultHTTPPort)
 	}
-	high := merge(mustDecode(t, []byte(`{"floatClose":9999}`)), presentOf([]byte(`{"floatClose":9999}`)))
-	if high.FloatClose != MaxFloatClose {
-		t.Errorf("9999 秒 = %d, want the %d s ceiling", high.FloatClose, MaxFloatClose)
+	kept := merge(mustDecode(t, []byte(`{"httpPort":"9090"}`)), presentOf([]byte(`{"httpPort":"9090"}`)))
+	if kept.HTTPPort != "9090" {
+		t.Errorf("文件写明 9090 时 = %q, want 9090", kept.HTTPPort)
+	}
+	bad := merge(mustDecode(t, []byte(`{"httpPort":"abc"}`)), presentOf([]byte(`{"httpPort":"abc"}`)))
+	if bad.HTTPPort != DefaultHTTPPort {
+		t.Errorf("不可用的端口 = %q, want the default", bad.HTTPPort)
+	}
+}
+
+func TestMergeDefaultsBooksExcerptOnlyWhenAbsent(t *testing.T) {
+	old := merge(mustDecode(t, []byte(`{"theme":"dark"}`)), presentOf([]byte(`{"theme":"dark"}`)))
+	if !old.RemoveBooksExcerpt {
+		t.Error("缺少 removeBooksExcerpt 时应默认开启")
+	}
+	off := merge(mustDecode(t, []byte(`{"removeBooksExcerpt":false}`)),
+		presentOf([]byte(`{"removeBooksExcerpt":false}`)))
+	if off.RemoveBooksExcerpt {
+		t.Error("文件写明的 false 被改回了 true")
+	}
+}
+
+func TestMergeDefaultsPreferYoudaoWordOnlyWhenAbsent(t *testing.T) {
+	old := merge(mustDecode(t, []byte(`{"theme":"dark"}`)), presentOf([]byte(`{"theme":"dark"}`)))
+	if !old.PreferYoudaoWord {
+		t.Error("缺少 preferYoudaoWord 时应默认开启")
+	}
+	off := merge(mustDecode(t, []byte(`{"preferYoudaoWord":false}`)),
+		presentOf([]byte(`{"preferYoudaoWord":false}`)))
+	if off.PreferYoudaoWord {
+		t.Error("文件写明的 false 被改回了 true")
+	}
+}
+
+// The floating window is gone. A file that still names its selection list or
+// its shortcut loses those keys on load, so the saved file matches the windows
+// the app actually draws.
+func TestMergeDropsRetiredFloatingKeys(t *testing.T) {
+	data := []byte(`{"selections":{"floating":["tr-google"],"main":["dict-youdao"]},
+		"shortcuts":{"clipboardFloat":["alt+f"],"clipboard":["alt+shift+v"]}}`)
+	cfg := merge(mustDecode(t, data), presentOf(data))
+	if _, ok := cfg.Selections["floating"]; ok {
+		t.Error("floating 选择集不应保留")
+	}
+	if got := cfg.Selections[ContextMain]; len(got) != 1 || got[0] != "dict-youdao" {
+		t.Errorf("主窗口选择集 = %v, want 保留", got)
+	}
+	if _, ok := cfg.Shortcuts["clipboardFloat"]; ok {
+		t.Error("clipboardFloat 快捷键不应保留")
+	}
+	if got := cfg.Accel(SlotClipboard); len(got) != 1 || got[0] != "alt+shift+v" {
+		t.Errorf("剪贴板快捷键 = %v, want 保留", got)
+	}
+}
+
+func TestNormalizeHTTPPortKeepsOnlyUsablePorts(t *testing.T) {
+	ok := map[string]string{
+		"":       DefaultHTTPPort,
+		"  ":     DefaultHTTPPort,
+		"8080":   "8080",
+		" 9090 ": "9090",
+		"1":      "1",
+		"65535":  "65535",
+	}
+	for in, want := range ok {
+		if got, err := NormalizeHTTPPort(in); err != nil || got != want {
+			t.Errorf("NormalizeHTTPPort(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"0", "65536", "-1", "8o80", "80 80"} {
+		if _, err := NormalizeHTTPPort(in); err == nil {
+			t.Errorf("NormalizeHTTPPort(%q) was accepted", in)
+		}
+	}
+}
+
+func TestClampMaxHeightPctUsesThePickerStops(t *testing.T) {
+	cases := []struct{ in, want int }{
+		{-40, 100}, // a hand-edit below the picker falls back to the default
+		{0, 100},   // zero is the zero value of a file that predates the option
+		{25, 20},   // between stops snaps to the one below
+		{60, 60},
+		{100, 100},
+		{140, 100},
+	}
+	for _, c := range cases {
+		if got := ClampMaxHeightPct(c.in); got != c.want {
+			t.Errorf("ClampMaxHeightPct(%d) = %d, want %d", c.in, got, c.want)
+		}
 	}
 }
 
@@ -366,6 +523,48 @@ func TestGetDoesNotShareProviderExtras(t *testing.T) {
 	}
 }
 
+// 语种识别 is a new option, so a file written before it has no opinion and gets
+// the system detector; a mode this build does not know must not leave the
+// detector pointing at a service that cannot answer.
+func TestParseFallsBackForUnknownDetectOptimize(t *testing.T) {
+	cases := []struct{ raw, want string }{
+		{`{}`, DetectOptimizeNone},
+		{`{"detectOptimize":""}`, DetectOptimizeNone},
+		{`{"detectOptimize":"bing"}`, DetectOptimizeNone},
+		{`{"detectOptimize":"google"}`, DetectOptimizeGoogle},
+		{`{"detectOptimize":"baidu"}`, DetectOptimizeBaidu},
+	}
+	for _, tc := range cases {
+		cfg, err := parse([]byte(tc.raw))
+		if err != nil {
+			t.Fatalf("parse(%s): %v", tc.raw, err)
+		}
+		if cfg.DetectOptimize != tc.want {
+			t.Errorf("parse(%s).DetectOptimize = %q, want %q", tc.raw, cfg.DetectOptimize, tc.want)
+		}
+	}
+}
+
+// 菜单栏图标 is a two-image choice, so a file without it — or with a name this
+// build never draws — has to land on the bare glyph Easydict ships.
+func TestParseFallsBackForUnknownMenuBarIconStyle(t *testing.T) {
+	cases := []struct{ raw, want string }{
+		{`{}`, MenuBarIconRounded},
+		{`{"menuBarIconStyle":""}`, MenuBarIconRounded},
+		{`{"menuBarIconStyle":"round"}`, MenuBarIconRounded},
+		{`{"menuBarIconStyle":"square"}`, MenuBarIconSquare},
+	}
+	for _, tc := range cases {
+		cfg, err := parse([]byte(tc.raw))
+		if err != nil {
+			t.Fatalf("parse(%s): %v", tc.raw, err)
+		}
+		if cfg.MenuBarIconStyle != tc.want {
+			t.Errorf("parse(%s).MenuBarIconStyle = %q, want %q", tc.raw, cfg.MenuBarIconStyle, tc.want)
+		}
+	}
+}
+
 func mustDecode(t *testing.T, data []byte) Config {
 	t.Helper()
 	var cfg Config
@@ -481,5 +680,144 @@ func TestAutoUpdateSeedsOnlyForAFileThatPredatesIt(t *testing.T) {
 	}
 	if cfg.UpdateURL != "https://example.test/r.json" {
 		t.Errorf("updateURL = %q", cfg.UpdateURL)
+	}
+}
+
+func TestMergeDefaultsQueryIconOnlyWhenAbsent(t *testing.T) {
+	old := merge(mustDecode(t, []byte(`{"theme":"dark"}`)), presentOf([]byte(`{"theme":"dark"}`)))
+	if !old.AutoShowQueryIcon {
+		t.Error("缺少 autoShowQueryIcon 时应默认开启")
+	}
+	if old.QueryIconClickOnly || old.QueryIconMinLength != 0 || old.QueryIconExcludeLang != "zh-CN" {
+		t.Errorf("默认 = %v/%d/%q, want false/0/zh-CN",
+			old.QueryIconClickOnly, old.QueryIconMinLength, old.QueryIconExcludeLang)
+	}
+
+	raw := []byte(`{"autoShowQueryIcon":false,"queryIconClickOnly":true,"queryIconMinLength":33,"queryIconExcludeLang":"en"}`)
+	set := merge(mustDecode(t, raw), presentOf(raw))
+	if set.AutoShowQueryIcon || !set.QueryIconClickOnly {
+		t.Errorf("文件写明的开关被覆盖了: %v/%v", set.AutoShowQueryIcon, set.QueryIconClickOnly)
+	}
+	if set.QueryIconMinLength != 30 {
+		t.Errorf("QueryIconMinLength = %d, 期望按 10 对齐到 30", set.QueryIconMinLength)
+	}
+	if set.QueryIconExcludeLang != "en" {
+		t.Errorf("QueryIconExcludeLang = %q, 期望 en", set.QueryIconExcludeLang)
+	}
+}
+
+func TestMergeInputBoxDefaultsOnlyWhenAbsent(t *testing.T) {
+	raw := []byte(`{"theme":"dark"}`)
+	old := merge(mustDecode(t, raw), presentOf(raw))
+	if !old.KeepLastOnNoSelection {
+		t.Error("缺少 keepLastOnNoSelection 时应默认保留上次结果")
+	}
+	if old.ClearInputOnQuery || old.SelectTextOnOpen {
+		t.Errorf("ClearInputOnQuery/SelectTextOnOpen = %v/%v, want false/false",
+			old.ClearInputOnQuery, old.SelectTextOnOpen)
+	}
+
+	raw = []byte(`{"clearInputOnQuery":true,"selectTextOnOpen":true,"keepLastOnNoSelection":false}`)
+	set := merge(mustDecode(t, raw), presentOf(raw))
+	if !set.ClearInputOnQuery || !set.SelectTextOnOpen || set.KeepLastOnNoSelection {
+		t.Errorf("文件写明的开关被覆盖了: %v/%v/%v",
+			set.ClearInputOnQuery, set.SelectTextOnOpen, set.KeepLastOnNoSelection)
+	}
+}
+
+func TestLoadSeparatesTheTwoDetectionLanguages(t *testing.T) {
+	s := newTestStore(t)
+	// The detector falls back to these two guesses, so the same code twice says
+	// nothing; a hand-edited file gets a usable pair back.
+	dup := `{"firstLang":"ja","secondLang":"ja"}`
+	if err := os.WriteFile(s.path, []byte(dup), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := openStore(s.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := reopened.Get()
+	if cfg.FirstLang == cfg.SecondLang {
+		t.Errorf("两个语种仍是 %q", cfg.FirstLang)
+	}
+	if cfg.SecondLang != "zh-CN" {
+		t.Errorf("第二语言 = %q，want zh-CN", cfg.SecondLang)
+	}
+
+	// When the duplicate is already the default second language, the first one
+	// takes the default instead of leaving the pair equal.
+	dup = `{"firstLang":"zh-CN","secondLang":"zh-CN"}`
+	if err := os.WriteFile(s.path, []byte(dup), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err = openStore(s.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg = reopened.Get()
+	if cfg.FirstLang != "zh-CN" || cfg.SecondLang != "en" {
+		t.Errorf("语言对 = %q / %q，want zh-CN / en", cfg.FirstLang, cfg.SecondLang)
+	}
+}
+
+// 窗口配置 is a map keyed by window role: an older file has none and gets the
+// switches on, an explicit off stays off, and a role this build does not draw
+// is dropped instead of lingering in the saved file.
+func TestParseMergesWindowConfig(t *testing.T) {
+	cfg, err := parse([]byte(`{"windowConfig":{
+		"main":{"input":false,"langBar":true},
+		"floating":{"input":true},
+		"legacy":{"input":true}}}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.WindowConfig[WindowMain].Input {
+		t.Error("明确的关闭被改回了开启")
+	}
+	if !cfg.WindowConfig[WindowMain].LangBar {
+		t.Errorf("缺少的开关应回落到默认: %#v", cfg.WindowConfig)
+	}
+	if _, ok := cfg.WindowConfig["floating"]; ok {
+		t.Error("已移除的悬浮窗角色不应保留")
+	}
+	if _, ok := cfg.WindowConfig["legacy"]; ok {
+		t.Error("未知窗口角色不应保留")
+	}
+	if len(cfg.WindowConfig) != 1 {
+		t.Errorf("窗口数量 = %d, want 1: %#v", len(cfg.WindowConfig), cfg.WindowConfig)
+	}
+
+	fresh, err := parse([]byte(`{}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(fresh.WindowConfig) != 1 || !fresh.WindowConfig[WindowMain].Input || !fresh.WindowConfig[WindowMain].LangBar {
+		t.Errorf("没有该键时两个开关都应打开: %#v", fresh.WindowConfig)
+	}
+}
+
+// 字体大小 used to be s/m/l; the current scale has five steps. An old file must
+// land on the nearest new step, and a token this build does not know must fall
+// back to the default instead of leaving the Aa button with no size.
+func TestParseMigratesReadingSize(t *testing.T) {
+	cases := []struct{ stored, want string }{
+		{"1", "1"},
+		{"3", "3"},
+		{"5", "5"},
+		{"s", "1"},
+		{"m", "1"},
+		{"l", "2"},
+		{"", "1"},
+		{"huge", "1"},
+	}
+	for _, c := range cases {
+		cfg, err := parse([]byte(`{"resultFont":"` + c.stored + `"}`))
+		if err != nil {
+			t.Fatalf("parse(%q): %v", c.stored, err)
+		}
+		if cfg.ResultFont != c.want {
+			t.Errorf("resultFont %q → %q, want %q", c.stored, cfg.ResultFont, c.want)
+		}
 	}
 }

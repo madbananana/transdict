@@ -107,6 +107,19 @@ func init() {
 
 func (a *appleDict) Label() string { return "苹果词典" }
 
+// IsEnglishWord reports whether Dictionary Services has a headword for text.
+// 查询时自动分词 asks it before breaking a single token: iPad, LaTeX and UIKit
+// are words with capitals inside, not camelCase identifiers. The answer is also
+// what EasyDict consults, so both apps leave those words whole.
+func IsEnglishWord(text string) bool {
+	word := cleanLookup(text)
+	if word == "" || len([]rune(word)) > appleMaxQueryRunes {
+		return false
+	}
+	definition := copyTextDefinition(word)
+	return strings.TrimSpace(definition) != "" && !wrongScript(word, definition)
+}
+
 func (a *appleDict) Explain(ctx context.Context, text, sourceLang, targetLang string) ([]Entry, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -116,15 +129,15 @@ func (a *appleDict) Explain(ctx context.Context, text, sourceLang, targetLang st
 		return nil, fmt.Errorf("苹果词典：查询内容为空")
 	}
 	if len([]rune(word)) > appleMaxQueryRunes {
-		return nil, fmt.Errorf("苹果词典：仅支持单词查询（最多 %d 个字符）", appleMaxQueryRunes)
+		return nil, UnsupportedQuery(fmt.Sprintf("苹果词典：仅支持单词查询（最多 %d 个字符）", appleMaxQueryRunes))
 	}
 
 	definition := copyTextDefinition(word)
 	if strings.TrimSpace(definition) == "" {
-		return nil, fmt.Errorf("苹果词典未收录该词：%s", clip(word, 40))
+		return nil, NotFound(fmt.Sprintf("苹果词典未收录该词：%s", clip(word, 40)))
 	}
 	if wrongScript(word, definition) {
-		return nil, fmt.Errorf("苹果词典未收录该词：%s", clip(word, 40))
+		return nil, NotFound(fmt.Sprintf("苹果词典未收录该词：%s", clip(word, 40)))
 	}
 	// The service returns already-formatted plain text that repeats the
 	// headword, so Word carries the query and Text the body.

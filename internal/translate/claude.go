@@ -45,8 +45,10 @@ func init() {
 			{Key: settings.FieldAPIKey, Label: "API Key", Secret: true, Required: true},
 			{Key: settings.FieldBaseURL, Label: "接口地址", Placeholder: claudeDefaultBaseURL},
 			{Key: settings.FieldModel, Label: "模型", Placeholder: claudeDefaultModel},
+			{Key: settings.FieldSupportedModels, Label: "支持的模型", Placeholder: "claude-sonnet-4-5, claude-opus-4-1, claude-haiku-4-5"},
 			{Key: settings.FieldPrompt, Label: "附加指令", Text: true},
 		},
+		Models:  []string{"claude-sonnet-4-5", "claude-opus-4-1", "claude-haiku-4-5"},
 		Default: settings.Provider{BaseURL: claudeDefaultBaseURL, Model: claudeDefaultModel},
 	}, func(p settings.Provider) (Provider, error) {
 		return newClaude(p.BaseURL, p.APIKey, p.Model, p.Prompt), nil

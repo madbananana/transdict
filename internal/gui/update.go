@@ -33,7 +33,8 @@ func (r UpdateReport) Newer() bool { return r.Version != "" }
 // CheckUpdate is the button on the settings page. It answers whatever the source
 // says, including 没有更新.
 func (s *Service) CheckUpdate() (UpdateReport, error) {
-	return s.updateReport(s.cfg.Get().UpdateURL)
+	cfg := s.cfg.Get()
+	return s.updateReport(cfg.UpdateURL, cfg.IncludeBeta)
 }
 
 // CheckUpdateNow is the menu bar item. A manual check that stays silent is
@@ -51,10 +52,10 @@ func (s *Service) AutoCheckOnLaunch() {
 	s.checkUpdate(false)
 }
 
-func (s *Service) updateReport(source string) (UpdateReport, error) {
+func (s *Service) updateReport(source string, includeBeta bool) (UpdateReport, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), checkBudget)
 	defer cancel()
-	rel, err := update.Check(ctx, source, s.version)
+	rel, err := update.Check(ctx, source, s.version, includeBeta)
 	if err != nil {
 		return UpdateReport{}, err
 	}
@@ -76,7 +77,7 @@ func (s *Service) checkUpdate(manual bool) {
 		}
 		return
 	}
-	report, err := s.updateReport(cfg.UpdateURL)
+	report, err := s.updateReport(cfg.UpdateURL, cfg.IncludeBeta)
 	if err != nil {
 		// A silent failure is right at launch and wrong when the user asked.
 		if manual {

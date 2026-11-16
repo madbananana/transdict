@@ -14,28 +14,46 @@ import (
 	"transdict/internal/settings"
 )
 
-// mdict serves offline MDict dictionaries: the user points it at a folder that
-// holds .mdx files, and every dictionary that knows the headword answers. It is
-// Multi because one folder is one provider instance while the folder itself can
-// carry dozens of dictionaries.
+// mdict serves offline MDict dictionaries. Easydict imports individual .mdx
+// files, and so does this service: 导入词典 stores the files in FilesField and
+// those answer in the order they were imported. A folder still works on its
+// own — the older quick way — and is scanned only while no file is imported.
 type mdict struct {
-	dir string
+	dir   string
+	files []string
 }
 
-// mdictPathField is the Extra key the settings UI writes the folder into.
-const mdictPathField = "path"
+// PathField is the Extra key the settings UI writes the folder into.
+const PathField = "path"
+
+// FilesField is the Extra key holding one absolute .mdx path per line. It is
+// exported for the settings window, which edits the list.
+const FilesField = "files"
 
 func init() {
 	Register(settings.ServiceType{
-		Kind: "mdict", Name: "MDict 离线词典", Note: "本地 .mdx 词典文件夹，仅单词，离线可用",
+		Kind: "mdict", Name: "MDict 离线词典", Note: "本地 .mdx 词典文件或文件夹，仅单词，离线可用",
 		Free: true, Multi: true,
 		Fields: []settings.Field{
-			{Key: mdictPathField, Label: "词典文件夹", Placeholder: "~/Dicts", Required: true, Folder: true},
+			{Key: PathField, Label: "词典文件夹", Placeholder: "~/Dicts", Required: true, Folder: true},
 		},
 	}, func(p settings.Provider) (Provider, error) {
-		dir := expandHome(strings.TrimSpace(p.Get(mdictPathField)))
+		files := ParseFiles(p.Get(FilesField))
+		if len(files) > 0 {
+			usable := make([]string, 0, len(files))
+			for _, file := range files {
+				if info, err := os.Stat(file); err == nil && !info.IsDir() {
+					usable = append(usable, file)
+				}
+			}
+			if len(usable) == 0 {
+				return nil, fmt.Errorf("MDict：导入的词典文件都不存在")
+			}
+			return &mdict{files: usable}, nil
+		}
+		dir := expandHome(strings.TrimSpace(p.Get(PathField)))
 		if dir == "" {
-			return nil, fmt.Errorf("MDict：请先选择词典文件夹")
+			return nil, fmt.Errorf("MDict：请先选择词典文件夹或导入词典")
 		}
 		info, err := os.Stat(dir)
 		if err != nil || !info.IsDir() {
@@ -43,6 +61,28 @@ func init() {
 		}
 		return &mdict{dir: dir}, nil
 	})
+}
+
+// ParseFiles turns the stored newline-separated list into clean paths. Blank
+// lines and duplicates are dropped so an import cannot add the same file twice.
+func ParseFiles(raw string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, line := range strings.Split(raw, "\n") {
+		path := strings.TrimSpace(line)
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		out = append(out, path)
+	}
+	return out
+}
+
+// JoinFiles is the inverse of ParseFiles, kept beside it so both sides of the
+// Extra value agree on the separator.
+func JoinFiles(paths []string) string {
+	return strings.Join(ParseFiles(strings.Join(paths, "\n")), "\n")
 }
 
 func (m *mdict) Label() string { return "MDict 离线词典" }
@@ -61,7 +101,10 @@ func (m *mdict) Explain(ctx context.Context, text, sourceLang, targetLang string
 		return nil, err
 	}
 	if len(files) == 0 {
-		return nil, fmt.Errorf("MDict：文件夹内没有找到 .mdx 词典：%s", m.dir)
+		if m.dir != "" {
+			return nil, fmt.Errorf("MDict：文件夹内没有找到 .mdx 词典：%s", m.dir)
+		}
+		return nil, fmt.Errorf("MDict：尚未导入任何词典")
 	}
 
 	var (
@@ -96,7 +139,7 @@ func (m *mdict) Explain(ctx context.Context, text, sourceLang, targetLang string
 		if len(failures) > 0 && misses == 0 {
 			return nil, fmt.Errorf("MDict：%s", strings.Join(failures, "；"))
 		}
-		return nil, fmt.Errorf("MDict 本地词典未收录该词：%s", clip(word, 40))
+		return nil, NotFound(fmt.Sprintf("MDict 本地词典未收录该词：%s", clip(word, 40)))
 	}
 	return out, nil
 }
@@ -113,8 +156,14 @@ func mdictTitle(dict *mdxFile, file string) string {
 	return "《" + title + "》"
 }
 
-// dictionaries lists the candidate files, sorted so the answer order is stable.
+// dictionaries lists the files to query: the imported list when there is one,
+// otherwise every .mdx in the folder. Both are sorted for a stable answer order.
 func (m *mdict) dictionaries() ([]string, error) {
+	if len(m.files) > 0 {
+		out := append([]string(nil), m.files...)
+		sort.Strings(out)
+		return out, nil
+	}
 	dirEntries, err := os.ReadDir(m.dir)
 	if err != nil {
 		return nil, fmt.Errorf("MDict：无法读取词典文件夹：%s", err)

@@ -53,7 +53,7 @@ func (i *iciba) Explain(ctx context.Context, text, sourceLang, targetLang string
 		return nil, fmt.Errorf("金山词典：查询内容为空")
 	}
 	if len([]rune(word)) > icibaMaxQueryRunes {
-		return nil, fmt.Errorf("金山词典：查询过长（最多 %d 个字符），词典只收录单词与短语", icibaMaxQueryRunes)
+		return nil, UnsupportedQuery(fmt.Sprintf("金山词典：查询过长（最多 %d 个字符），词典只收录单词与短语", icibaMaxQueryRunes))
 	}
 
 	entries, pageErr := i.fromPage(ctx, word)
@@ -70,7 +70,7 @@ func (i *iciba) Explain(ctx context.Context, text, sourceLang, targetLang string
 	if suggestErr != nil {
 		return nil, suggestErr
 	}
-	return nil, fmt.Errorf("金山词典未收录该词：%s", clip(word, 40))
+	return nil, NotFound(fmt.Sprintf("金山词典未收录该词：%s", clip(word, 40)))
 }
 
 func (i *iciba) get(ctx context.Context, endpoint string, q url.Values, accept, referer string) ([]byte, int, error) {

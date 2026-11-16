@@ -123,3 +123,20 @@ func TestYoudaoEmptyTextErrors(t *testing.T) {
 		t.Errorf("error should be Chinese, got %q", err)
 	}
 }
+
+// 英文发音: the British voice is type 1, the American one type 2, and Chinese
+// keeps the native voice it always had.
+func TestYoudaoVoiceTypeFollowsTheEnglishVariant(t *testing.T) {
+	cases := []struct{ lang, want string }{
+		{"en", "2"},
+		{"en-US", "2"},
+		{"en-GB", "1"},
+		{"zh-CN", "1"},
+		{"", "1"},
+	}
+	for _, c := range cases {
+		if got := youdaoVoiceType(c.lang); got != c.want {
+			t.Errorf("youdaoVoiceType(%q) = %q, want %q", c.lang, got, c.want)
+		}
+	}
+}

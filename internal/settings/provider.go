@@ -30,6 +30,56 @@ const (
 	FieldModel   = "model"
 	FieldPrompt  = "prompt"
 	FieldExtra   = "extra"
+
+	// FieldCookie is EasyDict's Cookie Key（可选）: the browser cookie a network
+	// that blocks scripted requests needs before the translator answers.
+	FieldCookie = "cookie"
+
+	// FieldSupportedModels is EasyDict's 支持的模型: the list a card's model
+	// menu switches between. Only services that name a model have it.
+	FieldSupportedModels = "supportedModels"
+
+	// FieldReasoningEffort is the OpenAI-compatible 思考程度 picker. EasyDict
+	// offers 关闭/高/最大 and forwards the choice as reasoning_effort.
+	FieldReasoningEffort = "reasoningEffort"
+
+	// FieldHideThink mirrors EasyDict's 隐藏 <think> 标签内容: reasoning models
+	// that return their scratchpad inline should not show it in the card.
+	FieldHideThink = "hideThink"
+
+	// FieldEffort is the Claude Code CLI's 思考程度 picker. EasyDict offers a
+	// CLI-default plus 低/中/高/极高/最大, forwarded as claude --effort.
+	FieldEffort = "effort"
+
+	// The AI prompt configuration mirrors EasyDict's OpenAI page: a custom
+	// system/user prompt pair that replaces the built-in instructions, and one
+	// switch per query type the service may answer.
+	FieldEnableCustomPrompt = "enableCustomPrompt"
+	FieldSystemPrompt       = "systemPrompt"
+	FieldUserPrompt         = "userPrompt"
+
+	// FieldUsageStatus is EasyDict's 使用状态: follow the window selection,
+	// always answer, or never answer on its own.
+	FieldUsageStatus = "usageStatus"
+
+	// FieldStream is EasyDict's 启用流式传输: an endpoint that buffers or rejects
+	// streamed requests can be switched to the one-shot path without losing the
+	// service. Empty means on.
+	FieldStream = "stream"
+
+	// FieldTranslation, FieldSentence and FieldDictionary are the per-task
+	// switches; a service answers 翻译/句子分析/查单词 only while its switch is on.
+	FieldTranslation = "translation"
+	FieldSentence    = "sentence"
+	FieldDictionary  = "dictionary"
+)
+
+// Usage status values. Empty is EasyDict's 默认: the window's checked list
+// decides, as it does for every service that does not set one.
+const (
+	UsageDefault   = ""
+	UsageAlwaysOn  = "alwaysOn"
+	UsageAlwaysOff = "alwaysOff"
 )
 
 // Provider holds everything one service instance needs. Which fields are used
@@ -64,6 +114,18 @@ type Field struct {
 	// Folder asks for a directory picker next to the box, because typing a path
 	// to a dictionary folder is the one thing nobody gets right first time.
 	Folder bool `json:"folder,omitempty"`
+	// Options turns the box into a picker. Empty means free text.
+	Options []FieldOption `json:"options,omitempty"`
+	// Note is the small line under the box, EasyDict's footnote: it explains a
+	// switch or lists the variables a prompt accepts.
+	Note string `json:"note,omitempty"`
+}
+
+// FieldOption is one row of a Field picker. Value is what the provider stores,
+// Label what the user reads.
+type FieldOption struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
 }
 
 // ServiceType is what the settings UI offers in its "add service" list. It is
@@ -89,6 +151,18 @@ type ServiceType struct {
 	// with an instruction, so the panel only offers those shortcuts when one of
 	// these services is enabled.
 	Prompt bool `json:"prompt,omitempty"`
+
+	// Models is the model list a service offers out of the box. A configured
+	// 支持的模型 replaces it; the card's model menu switches between the rows.
+	Models []string `json:"models,omitempty"`
+
+	// FetchModels marks a service whose model list can be read from the
+	// endpoint, which is what puts EasyDict's 从云端获取模型 button on its page.
+	FetchModels bool `json:"fetchModels,omitempty"`
+
+	// FetchLocalModels is the same button worded for a daemon on this machine:
+	// EasyDict's 获取本地模型 reads what Ollama has already pulled.
+	FetchLocalModels bool `json:"fetchLocalModels,omitempty"`
 
 	// Site is where the service shows the same answer in its own page, with
 	// {text}, {source} and {target} standing for the query. It is a link the user

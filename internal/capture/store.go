@@ -76,13 +76,18 @@ func (s *Store) Preview(id string, index int) ([]byte, bool) {
 		}
 	}
 	var png []byte
+	var inline []byte
 	for _, f := range s.frames[id] {
 		if f.Index == index {
 			png = f.PNG
+			inline = f.Preview
 			break
 		}
 	}
 	s.mu.Unlock()
+	if len(inline) > 0 {
+		return inline, true
+	}
 	if png == nil {
 		return nil, false
 	}

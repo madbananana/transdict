@@ -13,6 +13,9 @@ type Frame struct {
 	PNG    []byte `json:"-"`
 	Width  int    `json:"width"`
 	Height int    `json:"height"`
+	// Preview is the display copy (JPEG) encoded beside the frame, so showing
+	// the frozen screen does not require decoding the lossless image first.
+	Preview []byte `json:"-"`
 }
 
 // Displays captures every active display, frozen at native resolution.

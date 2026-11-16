@@ -204,3 +204,41 @@ func TestOllamaDefaults(t *testing.T) {
 		t.Errorf("Label = %q", o.Label())
 	}
 }
+
+// 获取本地模型 reads /api/tags from the daemon: the catalog lives on this
+// machine, and a row without a name falls back to its model id.
+func TestOllamaListsPulledModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags" {
+			t.Errorf("path = %q, want /api/tags", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"models":[{"name":"qwen2.5:7b"},{"model":"llama3.2:3b"},{"name":""}]}`)
+	}))
+	defer srv.Close()
+
+	o := newOllama(srv.URL, "", "")
+	got, err := o.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if strings.Join(got, ",") != "qwen2.5:7b,llama3.2:3b" {
+		t.Errorf("模型列表 = %v", got)
+	}
+	if meta, ok := Meta("ollama"); !ok || !meta.FetchModels || !meta.FetchLocalModels {
+		t.Errorf("Ollama 应声明 FetchModels/FetchLocalModels: %+v", meta)
+	}
+}
+
+func TestOllamaListModelsReportsHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "daemon down", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	o := newOllama(srv.URL, "", "")
+	_, err := o.ListModels(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "获取模型列表 HTTP 500") {
+		t.Errorf("错误 = %v", err)
+	}
+}

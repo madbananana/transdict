@@ -7,6 +7,7 @@ package history
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -227,6 +228,61 @@ func (s *Store) Star(id string) (bool, error) {
 	return false, errors.New("记录不存在")
 }
 
+// Favorite is 快捷动作 → 添加到收藏. It stars the newest row holding this text,
+// and adds one when the query was never recorded — 记录查询历史 may be off, or
+// the answer may still be streaming. It never un-stars: EasyDict's quick action
+// only adds, and the 收藏 tab is where a row is dropped.
+func (s *Store) Favorite(text, translated, detected, targetLang string) (bool, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Newest first: the answer on screen belongs to the latest row, not to an
+	// older query of the same word.
+	for i := len(s.entries) - 1; i >= 0; i-- {
+		if s.entries[i].Source != text {
+			continue
+		}
+		if s.entries[i].Favorite {
+			return true, nil
+		}
+		s.entries[i].Favorite = true
+		// A row recorded before its answer arrived (streaming, or a provider the
+		// query log dropped) still has an empty translation; the favorite is
+		// only worth keeping with the text on screen.
+		if s.entries[i].Target == "" {
+			s.entries[i].Target = translated
+			if s.entries[i].Detected == "" {
+				s.entries[i].Detected = detected
+			}
+			if s.entries[i].TargetLang == "" {
+				s.entries[i].TargetLang = targetLang
+			}
+		}
+		return true, s.saveLocked()
+	}
+
+	e := Entry{
+		ID:         fmt.Sprintf("favorite-%d", time.Now().UnixNano()),
+		Kind:       "favorite",
+		Source:     text,
+		Detected:   detected,
+		Target:     translated,
+		TargetLang: targetLang,
+		Favorite:   true,
+		CreatedAt:  time.Now().Unix(),
+	}
+	s.entries = append(s.entries, e)
+	if len(s.entries) > MaxEntries {
+		drop := len(s.entries) - MaxEntries
+		s.entries = append([]Entry(nil), s.entries[drop:]...)
+	}
+	return true, s.saveLocked()
+}
+
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -264,6 +320,22 @@ func (s *Store) Clear(days int) (int, error) {
 		}
 		s.entries = out
 	}
+	return before - len(s.entries), s.saveLocked()
+}
+
+// ClearFavorites drops every starred row. EasyDict's favorites tab clears the
+// whole section, unlike the history cleanup that always spares favourites.
+func (s *Store) ClearFavorites() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	before := len(s.entries)
+	out := s.entries[:0]
+	for _, e := range s.entries {
+		if !e.Favorite {
+			out = append(out, e)
+		}
+	}
+	s.entries = out
 	return before - len(s.entries), s.saveLocked()
 }
 

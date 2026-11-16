@@ -170,6 +170,9 @@ tasks:
           cp build/darwin/Assets.car "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
         fi
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
+      # 苹果翻译 is Swift-only; the helper is compiled into the bundle beside
+      # the Go binary so it is signed by the same codesign pass.
+      - swiftc -parse-as-library -O -target "$(uname -m)-apple-macos15.0" -o "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS/apple-translate" build/darwin/apple-translate.swift
       - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents"
       - task: '{{if eq OS "darwin"}}codesign:bundle{{else}}codesign:skip{{end}}'
 
@@ -215,6 +218,7 @@ tasks:
           cp build/darwin/Assets.car "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources"
         fi
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS"
+      - swiftc -parse-as-library -O -target "$(uname -m)-apple-macos15.0" -o "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS/apple-translate" build/darwin/apple-translate.swift
       - cp "build/darwin/Info.dev.plist" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Info.plist"
       - task: codesign:bundle
         vars:

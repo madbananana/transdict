@@ -264,6 +264,83 @@ func TestCLIArgvAndPrompt(t *testing.T) {
 	}
 }
 
+// 思考程度 must reach claude as --effort, and only for the six levels EasyDict
+// offers; an empty or unknown value leaves the CLI default alone.
+func TestClaudeCLIForwardsEffort(t *testing.T) {
+	tests := []struct {
+		name   string
+		effort string
+		want   string
+	}{
+		{"默认不带参数", "", ""},
+		{"低", "low", "low"},
+		{"中", "medium", "medium"},
+		{"高", "high", "high"},
+		{"极高", "xhigh", "xhigh"},
+		{"最大", "max", "max"},
+		{"未知值忽略", "ultra", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := New(settings.Provider{
+				Kind:  "claude-cli",
+				Extra: map[string]string{"binary": "/bin/echo", "effort": tc.effort},
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			c := p.(*cliProvider)
+			var seen []string
+			c.run = func(_ context.Context, _ string, args []string, _ string) (string, error) {
+				seen = args
+				return "译文", nil
+			}
+			if _, _, err := c.Translate(context.Background(), "hi", "auto", "en"); err != nil {
+				t.Fatalf("Translate: %v", err)
+			}
+			argv := strings.Join(seen, " ")
+			if tc.want == "" {
+				if strings.Contains(argv, "--effort") {
+					t.Errorf("默认/未知值不应带 --effort: %q", argv)
+				}
+				return
+			}
+			if !strings.Contains(argv, "--effort "+tc.want) {
+				t.Errorf("argv = %q, want --effort %s", argv, tc.want)
+			}
+		})
+	}
+}
+
+// Only the Claude Code CLI has 思考程度; the other agents expose just the
+// three shared fields.
+func TestOnlyClaudeCLIExposesEffort(t *testing.T) {
+	for _, kind := range []string{"claude-cli", "codex-cli", "copilot-cli"} {
+		m, ok := Meta(kind)
+		if !ok {
+			t.Fatalf("%s 未注册", kind)
+		}
+		var effort *settings.Field
+		for i := range m.Fields {
+			if m.Fields[i].Key == settings.FieldEffort {
+				effort = &m.Fields[i]
+			}
+		}
+		if kind != "claude-cli" {
+			if effort != nil {
+				t.Errorf("%s 不应有 思考程度 字段", kind)
+			}
+			continue
+		}
+		if effort == nil {
+			t.Fatalf("%s 缺少 思考程度 字段: %+v", kind, m.Fields)
+		}
+		if effort.Label != "思考程度" || len(effort.Options) != 6 {
+			t.Errorf("思考程度字段 = %+v, want 6 个档位", effort)
+		}
+	}
+}
+
 func TestCLIRegistryDefaults(t *testing.T) {
 	want := map[string]string{
 		"claude-cli":  "claude",

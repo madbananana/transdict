@@ -16,6 +16,7 @@ import (
 // both as {"pos","tran"} and as {"tr":[{"l":{"i":[...]}}]}.
 const youdaoFixture = `{
   "ec": {
+    "exam_type": ["初中", "高中", "CET4"],
     "word": [
       {
         "ukphone": "ˈæp(ə)l",
@@ -47,7 +48,18 @@ const youdaoFixture = `{
       {"sentence": "He ate the <b>apple</b>, stalk and all.", "sentence-translation": "他把那个苹果吃了个干净。"},
       {"sentence": "", "sentence-translation": "空句子应被跳过"}
     ]
-  }
+  },
+  "syno": {"word": "apple", "synos": [
+    {"pos": "n.", "ws": ["customer", "guy"], "tran": "[园艺]苹果；家伙"},
+    {"pos": "adj.", "ws": [], "tran": "空词组应被跳过"}
+  ]},
+  "phrs": {"word": "apple", "phrs": [
+    {"headword": "apple tree", "translation": "苹果树"},
+    {"headword": "", "translation": "空短语应被跳过"}
+  ]},
+  "etym": {"word": "apple", "etyms": {"zh": [
+    {"source": "有道", "word": "apple", "value": "源自古英语 æppel。", "url": "", "desc": ""}
+  ]}}
 }`
 
 func newYoudaoServer(t *testing.T, status int, body string, seen *http.Request) Provider {
@@ -179,6 +191,17 @@ func TestYoudaoExplainBuildsEntry(t *testing.T) {
 		t.Errorf("Web = %+v, 期望重复义不再单列", e.Web)
 	}
 
+	// Compounds that merely contain the query are lookups, not senses, so they
+	// travel separately for the card's related-word rows.
+	if len(e.Related) != 1 || e.Related[0].Value != "Apple Inc." ||
+		strings.Join(e.Related[0].Conts, "|") != "苹果公司" {
+		t.Errorf("Related = %+v, 期望保留 Apple Inc. 作为相关词", e.Related)
+	}
+
+	if strings.Join(e.Exams, "|") != "初中|高中|CET4" {
+		t.Errorf("Exams = %v, 期望保留考试标签", e.Exams)
+	}
+
 	if len(e.Examples) != 1 {
 		t.Fatalf("Examples = %+v, 期望一条双语例句", e.Examples)
 	}
@@ -187,6 +210,23 @@ func TestYoudaoExplainBuildsEntry(t *testing.T) {
 	}
 	if e.Examples[0].Translation != "他把那个苹果吃了个干净。" {
 		t.Errorf("例句译文 = %q", e.Examples[0].Translation)
+	}
+
+	// 同义词/短语/词源 are the sections EasyDict shows below the senses; an
+	// empty group or headword must not leave a blank row behind.
+	if len(e.Synonyms) != 1 || e.Synonyms[0].Pos != "n." ||
+		strings.Join(e.Synonyms[0].Words, "|") != "customer|guy" {
+		t.Errorf("Synonyms = %+v, 期望一组 n. 同义词", e.Synonyms)
+	}
+	if e.Synonyms[0].Tran != "[园艺]苹果；家伙" {
+		t.Errorf("Synonyms 释义 = %q", e.Synonyms[0].Tran)
+	}
+	if len(e.Phrases) != 1 || e.Phrases[0].Headword != "apple tree" ||
+		e.Phrases[0].Translation != "苹果树" {
+		t.Errorf("Phrases = %+v, 期望 apple tree 并跳过空短语", e.Phrases)
+	}
+	if e.Etymology != "源自古英语 æppel。" {
+		t.Errorf("Etymology = %q", e.Etymology)
 	}
 }
 

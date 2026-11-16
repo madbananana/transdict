@@ -93,10 +93,11 @@ func (y *youdao) Speak(ctx context.Context, text, lang string, slow bool) (*Clip
 }
 
 // youdaoVoiceType maps a canonical language code to the dictvoice type value:
-// 1 = 英音(UK), 2 = 美音(US). English defaults to US; Chinese — and every other
-// language, which the endpoint serves with its own native voice — uses type 1.
+// 1 = 英音(UK), 2 = 美音(US). English defaults to US — 英文发音 sends en-GB for
+// the British voice — and Chinese, like every other language the endpoint
+// serves with its own native voice, uses type 1.
 func youdaoVoiceType(lang string) string {
-	if strings.HasPrefix(lang, "en") {
+	if strings.HasPrefix(lang, "en") && !strings.HasPrefix(lang, "en-GB") {
 		return "2"
 	}
 	return "1"

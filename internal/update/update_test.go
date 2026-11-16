@@ -48,7 +48,7 @@ func serve(t *testing.T, status int, body string) *httptest.Server {
 
 func TestFetchReadsAGitHubRelease(t *testing.T) {
 	srv := serve(t, http.StatusOK, `{"tag_name":"v1.4.0","html_url":"https://example.test/releases/v1.4.0","body":"修好了截图"}`)
-	rel, err := Fetch(context.Background(), srv.URL)
+	rel, err := Fetch(context.Background(), srv.URL, false)
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestFetchReadsAGitHubRelease(t *testing.T) {
 
 func TestFetchPrefersTheFlatShape(t *testing.T) {
 	srv := serve(t, http.StatusOK, `{"version":"1.4.0","url":"https://example.test/d.pkg","notes":"flat"}`)
-	rel, err := Fetch(context.Background(), srv.URL)
+	rel, err := Fetch(context.Background(), srv.URL, false)
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -78,45 +78,87 @@ func TestFetchRefusesWhatIsNotARelease(t *testing.T) {
 	}
 	for _, c := range cases {
 		srv := serve(t, http.StatusOK, c.body)
-		if _, err := Fetch(context.Background(), srv.URL); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := Fetch(context.Background(), srv.URL, false); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: err = %v, want 包含 %q", c.name, err, c.want)
 		}
 	}
-	if _, err := Fetch(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "未设置更新源") {
+	if _, err := Fetch(context.Background(), "", false); err == nil || !strings.Contains(err.Error(), "未设置更新源") {
 		t.Errorf("空地址: err = %v", err)
 	}
 }
 
 func TestFetchReportsAnUnreachableSource(t *testing.T) {
 	srv := serve(t, http.StatusNotFound, `{"tag_name":"1.4.0"}`)
-	if _, err := Fetch(context.Background(), srv.URL); err == nil || !strings.Contains(err.Error(), "404") {
+	if _, err := Fetch(context.Background(), srv.URL, false); err == nil || !strings.Contains(err.Error(), "404") {
 		t.Errorf("err = %v, want 带上状态码", err)
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Fetch(cancelled, "https://example.test/releases.json"); err == nil {
+	if _, err := Fetch(cancelled, "https://example.test/releases.json", false); err == nil {
 		t.Error("取消的请求不应该成功")
 	}
 }
 
 func TestCheckStaysQuietWhenTheBuildIsCurrent(t *testing.T) {
 	srv := serve(t, http.StatusOK, `{"tag_name":"1.4.0","html_url":"https://example.test/r"}`)
-	current, err := Check(context.Background(), srv.URL, "1.4.0")
+	current, err := Check(context.Background(), srv.URL, "1.4.0", false)
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
 	if current != nil {
 		t.Errorf("同版本不应该报出新发布: %+v", current)
 	}
-	ahead, err := Check(context.Background(), srv.URL, "1.5.0")
+	ahead, err := Check(context.Background(), srv.URL, "1.5.0", false)
 	if err != nil || ahead != nil {
 		t.Errorf("更新的本地版本不该报出新发布: %+v %v", ahead, err)
 	}
-	fresh, err := Check(context.Background(), srv.URL, "1.3.0")
+	fresh, err := Check(context.Background(), srv.URL, "1.3.0", false)
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
 	if fresh == nil || fresh.Version != "1.4.0" {
 		t.Errorf("落后的版本应该报出 1.4.0, got %+v", fresh)
+	}
+}
+
+// GitHub's /releases answers with a list, newest first and betas included.
+// Without 包括 Beta 版本 the newest published build is the one to offer.
+const releaseList = `[
+	{"tag_name":"v1.5.0-beta.1","html_url":"https://example.test/beta","prerelease":true},
+	{"tag_name":"v1.4.0","html_url":"https://example.test/stable","prerelease":false}
+]`
+
+func TestFetchSkipsPrereleasesUnlessAsked(t *testing.T) {
+	srv := serve(t, http.StatusOK, releaseList)
+	stable, err := Fetch(context.Background(), srv.URL, false)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if stable == nil || stable.Version != "v1.4.0" || stable.URL != "https://example.test/stable" {
+		t.Errorf("默认应该拿到 1.4.0, got %+v", stable)
+	}
+	beta, err := Fetch(context.Background(), srv.URL, true)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if beta == nil || beta.Version != "v1.5.0-beta.1" {
+		t.Errorf("包括 Beta 时应该拿到 1.5.0-beta.1, got %+v", beta)
+	}
+}
+
+// A beta is recognized by its tag even when the source does not say so: a flat
+// manifest has no prerelease field to read.
+func TestFetchHidesABetaOnlySource(t *testing.T) {
+	srv := serve(t, http.StatusOK, `{"tag_name":"v1.5.0-beta.1","html_url":"https://example.test/beta"}`)
+	rel, err := Fetch(context.Background(), srv.URL, false)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if rel != nil {
+		t.Errorf("没有打开包括 Beta 时不该报出预发布版本: %+v", rel)
+	}
+	rel, err = Fetch(context.Background(), srv.URL, true)
+	if err != nil || rel == nil || rel.Version != "v1.5.0-beta.1" {
+		t.Errorf("包括 Beta 时应该报出预发布版本: %+v %v", rel, err)
 	}
 }

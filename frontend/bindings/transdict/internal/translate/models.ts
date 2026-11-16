@@ -17,6 +17,20 @@ export interface Result {
     "pending"?: boolean;
 
     /**
+     * Streaming marks a row that is readable but has not finished writing yet,
+     * so 停止生成 is offered on that card alone. Only progress updates set it.
+     */
+    "streaming"?: boolean;
+
+    /**
+     * Warning marks an answer that is empty rather than broken — the service
+     * replied, there was just nothing to translate. EasyDict's noResult warning:
+     * the card folds to a quiet row, keeps its ⊘ mark and hides 重试, which
+     * cannot fix a question the service had no answer for.
+     */
+    "warning"?: boolean;
+
+    /**
      * Markdown says the answer came from a service whose reply is prose — with
      * headings and code fences in it — so the panel renders it instead of quoting
      * it. Site is the same query on the service's own page, for when a card looks
@@ -25,4 +39,20 @@ export interface Result {
      */
     "markdown"?: boolean;
     "site"?: string;
+
+    /**
+     * Model names the model an AI service answered with, and Models is what its
+     * card menu offers — EasyDict's 支持的模型 list, or the kind's shipped
+     * defaults. Plain translators leave both empty and draw no chip.
+     */
+    "model"?: string;
+    "models"?: string[] | null;
+
+    /**
+     * PromptTitle and PromptURL are EasyDict's promptURL: a page where the user
+     * can fix what the error is about. Only a refused key or exhausted quota
+     * carries one, because that is the failure a settings page cannot explain.
+     */
+    "promptTitle"?: string;
+    "promptUrl"?: string;
 }

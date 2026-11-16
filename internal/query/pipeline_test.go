@@ -30,10 +30,17 @@ func init() {
 	// A service that only answers into Chinese, the way 有道 refuses 日语→韩语.
 	translate.Register(settings.ServiceType{Kind: "test-pair", Name: "仅中文翻译"},
 		func(settings.Provider) (translate.Provider, error) { return chineseOnly{}, nil })
+	translate.Register(settings.ServiceType{Kind: "test-stream", Name: "流式翻译"},
+		func(settings.Provider) (translate.Provider, error) { return streamEcho{}, nil })
+	// A stream that never finishes on its own, so 停止生成 has something to end.
+	translate.Register(settings.ServiceType{Kind: "test-halt", Name: "长流翻译"},
+		func(settings.Provider) (translate.Provider, error) { return streamHalt{}, nil })
 	dict.Register(settings.ServiceType{Kind: "test-dict", Name: "测试词典"},
 		func(settings.Provider) (dict.Provider, error) { return gloss{}, nil })
 	tts.Register(settings.ServiceType{Kind: "test-tts", Name: "测试朗读"},
 		func(settings.Provider) (tts.Provider, error) { return silent{}, nil })
+	tts.Register(settings.ServiceType{Kind: "test-tts-b", Name: "第二个朗读"},
+		func(settings.Provider) (tts.Provider, error) { return silentB{}, nil })
 	tts.Register(settings.ServiceType{Kind: "test-tts-mute", Name: "无声朗读"},
 		func(settings.Provider) (tts.Provider, error) { return muted{}, nil })
 }
@@ -102,6 +109,25 @@ func TestAProviderWithoutARouteIsLeftOut(t *testing.T) {
 	}
 }
 
+// 自动选择 resolves once the text is known: Chinese answers in English and
+// everything else in Chinese, the pair the app exists for.
+func TestAutoTargetFollowsTheText(t *testing.T) {
+	e := fixture(t, pipelineConfig(map[string][]string{settings.ContextMain: {"tr"}}))
+
+	zh := e.Run(context.Background(), Request{
+		Context: settings.ContextMain, Text: "今天天气很好", SourceLang: "auto", TargetLang: "auto",
+	})
+	if zh.TargetLang != "en" {
+		t.Errorf("中文 → 自动选择 = %q, want en", zh.TargetLang)
+	}
+	en := e.Run(context.Background(), Request{
+		Context: settings.ContextMain, Text: "hello", SourceLang: "auto", TargetLang: "auto",
+	})
+	if en.TargetLang != "zh-CN" {
+		t.Errorf("英文 → 自动选择 = %q, want zh-CN", en.TargetLang)
+	}
+}
+
 type gloss struct{}
 
 func (gloss) Label() string { return "测试词典" }
@@ -114,6 +140,13 @@ type silent struct{}
 func (silent) Label() string { return "测试朗读" }
 func (silent) Speak(context.Context, string, string, bool) (*tts.Clip, error) {
 	return &tts.Clip{MIME: "audio/mpeg", URL: "https://speech.test/hello.mp3"}, nil
+}
+
+type silentB struct{}
+
+func (silentB) Label() string { return "第二个朗读" }
+func (silentB) Speak(context.Context, string, string, bool) (*tts.Clip, error) {
+	return &tts.Clip{MIME: "audio/mpeg", URL: "https://speech.test/default.mp3"}, nil
 }
 
 type muted struct{}
@@ -138,6 +171,30 @@ func TestSpeakFallsBackToTheNextVoice(t *testing.T) {
 	}
 	if res.Provider != "tts" || res.Clip.Source() == "" {
 		t.Fatalf("结果 = %+v, want 第二个服务的音频", res)
+	}
+}
+
+// 默认 TTS 服务 moves one configured voice to the front; it does not remove the
+// fallback behind it, so an installed-but-broken default still speaks.
+func TestSpeakPrefersTheDefaultVoice(t *testing.T) {
+	cfg := pipelineConfig(nil)
+	cfg.TTS = []settings.Provider{
+		enabled("first", settings.CatTTS, "test-tts"),
+		enabled("default", settings.CatTTS, "test-tts-b"),
+	}
+	cfg.DefaultTTS = "default"
+	res := fixture(t, cfg).Speak("hello", "en", false)
+	if res.Error != "" || res.Provider != "default" {
+		t.Fatalf("结果 = %+v, want 默认服务先念", res)
+	}
+	if res.Clip.URL != "https://speech.test/default.mp3" {
+		t.Errorf("音频 = %q, want 默认服务的音频", res.Clip.URL)
+	}
+
+	cfg.DefaultTTS = ""
+	res = fixture(t, cfg).Speak("hello", "en", false)
+	if res.Provider != "first" {
+		t.Errorf("没有默认服务时 = %q, want 配置顺序里的第一个", res.Provider)
 	}
 }
 
@@ -202,6 +259,9 @@ func pipelineConfig(selections map[string][]string) settings.Config {
 		TTS:        []settings.Provider{enabled("tts", settings.CatTTS, "test-tts")},
 		SourceLang: "auto", TargetLang: "zh-CN",
 		Selections: selections,
+		// A fresh install translates what it read; the zero value here would make
+		// every screenshot test look like 图片 OCR 后自动查询 was switched off.
+		AutoQueryOCR: true,
 	}
 }
 
@@ -228,17 +288,48 @@ func TestScreenshotQueryTranslatesWhatItRead(t *testing.T) {
 	}
 }
 
+// 图片 OCR 后自动查询 off: the text is the whole answer, so neither the
+// translators nor the dictionary are asked. The crop is still shown, which is
+// what makes the recognized text usable at all.
+func TestScreenshotCanStopAtTheRecognizedText(t *testing.T) {
+	cfg := pipelineConfig(map[string][]string{settings.ContextScreenshot: {"ocr", "tr"}})
+	cfg.AutoQueryOCR = false
+	e := fixture(t, cfg)
+
+	var partial *Response
+	res := e.RunPartial(context.Background(), Request{
+		Context: settings.ContextScreenshot, Mode: "screenshot", Image: []byte("png-bytes"),
+	}, func(p *Response) { partial = p })
+	if res.SourceText != "hello world" {
+		t.Fatalf("识别原文 = %q, want %q", res.SourceText, "hello world")
+	}
+	if len(res.Translate) != 0 || len(res.Dict) != 0 {
+		t.Errorf("关闭自动查询后 = 译文 %d 词典 %d, want 0 与 0", len(res.Translate), len(res.Dict))
+	}
+	if res.Error != "" {
+		t.Errorf("停止在识别文字不该报错，得到 %q", res.Error)
+	}
+	if res.ImageURL == "" {
+		t.Error("截图仍应带上裁切图")
+	}
+	// The sketch still goes out first, so the panel shows the crop while the
+	// final answer replaces it with the text.
+	if partial == nil || partial.SourceText != "hello world" || !partial.Partial {
+		t.Errorf("第一帧 = %+v, want 带识别文字的草稿", partial)
+	}
+}
+
 // The same request on a context that shows one line must not pay for a dictionary
 // round trip it cannot display.
 func TestTextQueryRunsOnlyTheStagesAWindowShows(t *testing.T) {
 	e := fixture(t, pipelineConfig(map[string][]string{
-		settings.ContextMini: {"tr"},
-		settings.ContextMain: {"dict", "tr"},
+		settings.ContextReplace: {"tr"},
+		settings.ContextMain:    {"dict", "tr"},
 	}))
 
-	mini := e.Run(context.Background(), Request{Context: settings.ContextMini, Mode: "mini", Text: "hello"})
-	if len(mini.Translate) != 1 || len(mini.Dict) != 0 {
-		t.Errorf("迷你窗 = 译文 %d 词典 %d, want 1 与 0", len(mini.Translate), len(mini.Dict))
+	replace := e.Run(context.Background(), Request{Context: settings.ContextReplace, Mode: "replace", Text: "hello"})
+	if len(replace.Translate) != 1 || len(replace.Dict) != 0 {
+		t.Errorf("翻译并替换 = 译文 %d 词典 %d, want 1 与 0", len(replace.Translate), len(replace.Dict))
 	}
 
 	main := e.Run(context.Background(), Request{Context: settings.ContextMain, Mode: "input", Text: "hello"})
@@ -437,6 +528,152 @@ func TestFastServiceIsShownBeforeSlowOneFinishes(t *testing.T) {
 	}
 	if len(res.Translate) != 2 || res.Translate[0].Provider != "slow" || res.Translate[1].Provider != "fast" {
 		t.Errorf("最终译文顺序 = %+v, want 配置顺序 slow, fast", res.Translate)
+	}
+}
+
+// streamPace is longer than the 80ms throttle translateStage uses, so every
+// chunk of the fake answer reaches the window instead of being merged away.
+var streamPace = 100 * time.Millisecond
+
+type streamEcho struct{}
+
+func (streamEcho) Label() string { return "流式翻译" }
+
+func (streamEcho) Translate(ctx context.Context, text, src, dst string) (string, string, error) {
+	return streamEcho{}.TranslateStream(ctx, text, src, dst, nil)
+}
+
+func (streamEcho) TranslateStream(ctx context.Context, text, _, _ string, onText func(string)) (string, string, error) {
+	chunks := []string{"译", "译文", "译文:" + text}
+	for i, chunk := range chunks {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return "", "", ctx.Err()
+			case <-time.After(streamPace):
+			}
+		}
+		if onText != nil {
+			onText(chunk)
+		}
+	}
+	return chunks[len(chunks)-1], "en", nil
+}
+
+// streamHalt sends one piece and then waits for the caller to stop it, the way
+// a long AI answer keeps generating until 停止生成 is pressed.
+type streamHalt struct{}
+
+func (streamHalt) Label() string { return "长流翻译" }
+
+func (streamHalt) Translate(ctx context.Context, text, src, dst string) (string, string, error) {
+	return streamHalt{}.TranslateStream(ctx, text, src, dst, nil)
+}
+
+func (streamHalt) TranslateStream(ctx context.Context, _, _, _ string, onText func(string)) (string, string, error) {
+	if onText != nil {
+		onText("半")
+	}
+	<-ctx.Done()
+	return "", "", ctx.Err()
+}
+
+// A streaming service is readable before it is finished: the card grows word by
+// word instead of showing loading dots until the last token.
+func TestStreamedAnswerReachesTheCardBeforeItFinishes(t *testing.T) {
+	cfg := pipelineConfig(map[string][]string{settings.ContextMain: {"stream"}})
+	cfg.Translate = []settings.Provider{enabled("stream", settings.CatTranslate, "test-stream")}
+	e := fixture(t, cfg)
+
+	var mu sync.Mutex
+	var seen []string
+	sawStreaming := false
+	res := e.RunPartial(context.Background(), Request{
+		Context: settings.ContextMain, Mode: "input", Text: "hello",
+	}, func(p *Response) {
+		if len(p.Translate) == 0 || p.Translate[0].Pending {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if p.Translate[0].Streaming {
+			sawStreaming = true
+		}
+		text := p.Translate[0].Text
+		if len(seen) == 0 || seen[len(seen)-1] != text {
+			seen = append(seen, text)
+		}
+	})
+
+	if !sawStreaming {
+		t.Error("中途没有一张卡标出 停止生成")
+	}
+
+	mu.Lock()
+	texts := append([]string(nil), seen...)
+	mu.Unlock()
+
+	if len(texts) < 2 {
+		t.Fatalf("流式中途只推送了 %v, want 译文完成前的中间文本", texts)
+	}
+	for i, text := range texts {
+		if !strings.HasPrefix("译文:hello", text) {
+			t.Errorf("第 %d 个快照 = %q, want 最终译文的片段", i, text)
+		}
+	}
+	if len(texts[len(texts)-1]) <= len(texts[0]) {
+		t.Errorf("快照没有增长: %v", texts)
+	}
+	if res.Partial || len(res.Translate) != 1 || res.Translate[0].Text != "译文:hello" || res.Translate[0].Pending {
+		t.Errorf("最终结果 = %+v, want 完整译文且非 partial", res)
+	}
+	if len(res.Translate) == 1 && res.Translate[0].Streaming {
+		t.Errorf("完成的译文仍标着 streaming: %+v", res.Translate[0])
+	}
+}
+
+// 停止生成 ends one service where it stands: the words already on the card stay,
+// the row is not an error, and a second press has nothing left to stop.
+func TestStopEndsOneStreamWithTheTextThatArrived(t *testing.T) {
+	cfg := pipelineConfig(map[string][]string{settings.ContextMain: {"halt"}})
+	cfg.Translate = []settings.Provider{enabled("halt", settings.CatTranslate, "test-halt")}
+	e := fixture(t, cfg)
+
+	arrived := make(chan struct{})
+	var once sync.Once
+	done := make(chan *Response, 1)
+	go func() {
+		done <- e.RunPartial(context.Background(), Request{
+			Context: settings.ContextMain, Mode: "input", Text: "hello",
+		}, func(p *Response) {
+			if len(p.Translate) > 0 && p.Translate[0].Text == "半" {
+				once.Do(func() { close(arrived) })
+			}
+		})
+	}()
+
+	select {
+	case <-arrived:
+	case <-time.After(2 * time.Second):
+		t.Fatal("没有等到第一段流式文本")
+	}
+	if !e.StopTranslate(settings.ContextMain, "halt") {
+		t.Fatal("流式服务应可停止")
+	}
+
+	select {
+	case res := <-done:
+		if res.Partial {
+			t.Errorf("停止后的结果仍是 partial: %+v", res)
+		}
+		if len(res.Translate) != 1 || res.Translate[0].Text != "半" || res.Translate[0].Error != "" {
+			t.Errorf("停止后应保留已到的文本且不算错误, 实际 %+v", res.Translate)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("停止后查询没有结束")
+	}
+	if e.StopTranslate(settings.ContextMain, "halt") {
+		t.Error("结束后不应再报告可停止")
 	}
 }
 

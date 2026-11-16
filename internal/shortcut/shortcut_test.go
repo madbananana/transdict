@@ -45,6 +45,42 @@ func TestPlannedRegistersEveryAccelOfASlot(t *testing.T) {
 	}
 }
 
+func TestPlannedBindsToggleSelect(t *testing.T) {
+	cfg := settings.Default()
+	cfg.Shortcuts[settings.SlotToggleSelect] = []string{"ctrl+alt+9"}
+	called := 0
+	got := planned(cfg, Actions{ToggleSelect: func() { called++ }})
+	if len(got) != 1 || got[0].accel != "ctrl+alt+9" {
+		t.Fatalf("planned = %v, want the one toggle key", got)
+	}
+	got[0].run()
+	if called != 1 {
+		t.Errorf("handler ran %d times, want 1", called)
+	}
+}
+
+func TestPlannedBindsTheThreeOCRActions(t *testing.T) {
+	cfg := settings.Default()
+	cfg.Shortcuts[settings.SlotOCRShot] = []string{"ctrl+alt+7"}
+	cfg.Shortcuts[settings.SlotOCRClipboard] = []string{"ctrl+alt+8"}
+	cfg.Shortcuts[settings.SlotOCRWindow] = []string{"ctrl+alt+9"}
+	var ran []string
+	got := planned(cfg, Actions{
+		OCRShot:      func() { ran = append(ran, "shot") },
+		OCRClipboard: func() { ran = append(ran, "clipboard") },
+		OCRWindow:    func() { ran = append(ran, "window") },
+	})
+	if len(got) != 3 {
+		t.Fatalf("planned = %d registrations, want the three OCR keys", len(got))
+	}
+	for _, r := range got {
+		r.run()
+	}
+	if strings.Join(ran, ",") != "shot,clipboard,window" {
+		t.Errorf("handlers = %v", ran)
+	}
+}
+
 func TestConflictsNamesBothSlots(t *testing.T) {
 	cfg := settings.Default()
 	cfg.Shortcuts[settings.SlotInput] = []string{"alt+shift+t"}

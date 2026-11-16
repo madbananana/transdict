@@ -2,15 +2,17 @@
 // module only re-exports them and adds the parts every window needs: role
 // filtering (Wails emits events to all windows), audio playback, and a few
 // display helpers.
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { Browser, Events } from '@wailsio/runtime'
-import { applyLocale, t } from './i18n'
+import { applyLocale, t, uiLocale } from './i18n'
+import { appAccel, type AppAction } from './appkeys'
+import { speechKey, stopsPlayback } from './speech'
 import { Service, SettingsService } from '../bindings/transdict/internal/gui/index.js'
 import { AppCommand, AppTheme, AppUiLang, QueryBusy, QueryResult } from '../bindings/events/index.js'
 
 import type { Busy } from '../bindings/transdict/internal/gui/models.js'
 import type { Response } from '../bindings/transdict/internal/query/models.js'
-import type { Config, Field, Label, Provider, ServiceType } from '../bindings/transdict/internal/settings/models.js'
+import type { AnkiMapping, Config, Field, Label, Provider, ServiceType } from '../bindings/transdict/internal/settings/models.js'
 import type { Entry, Result as DictResult } from '../bindings/transdict/internal/dict/models.js'
 import type { Outcome as OCROutcome } from '../bindings/transdict/internal/ocr/models.js'
 import type { Result as TranslateResult } from '../bindings/transdict/internal/translate/models.js'
@@ -18,8 +20,8 @@ import type { Lang } from '../bindings/transdict/internal/langs/models.js'
 
 export { Service, SettingsService }
 export type {
-  Busy, Config, DictResult, Entry, Field, Label, Lang, OCROutcome, Provider, Response, ServiceType,
-  TranslateResult,
+  AnkiMapping, Busy, Config, DictResult, Entry, Field, Label, Lang, OCROutcome, Provider, Response,
+  ServiceType, TranslateResult,
 }
 
 // A language change rewrites Go's side of the text and the bundle reads its own
@@ -33,7 +35,7 @@ Events.On(AppUiLang, (ev: { data: string }) => applyLocale(ev.data))
 // the result the user is still looking at.
 Events.On(AppTheme, (ev: { data: string }) => applyTheme(ev.data))
 
-export type Role = 'main' | 'float' | 'mini' | 'capture' | 'settings'
+export type Role = 'main' | 'capture' | 'settings'
 
 /** rememberView keeps the view a window was showing across a reload. Changing
  * the interface language reloads every window — the string tables are built when
@@ -57,10 +59,9 @@ export function restoreView(key: string, valid: string[], fallback: string): str
   return fallback
 }
 
-/** roleOf mirrors gui.target(): which window a query context answers in. */
-export function roleOf(context: string): Role {
-  if (context === 'floating' || context === 'odict') return 'float'
-  if (context === 'mini') return 'mini'
+/** roleOf names the window a query context answers in: every context lands in
+ * the translation window. */
+export function roleOf(_context: string): Role {
   return 'main'
 }
 
@@ -83,9 +84,56 @@ export function onCommand(fn: (name: string) => void): () => void {
   })
 }
 
+/** MenuAction is one 快捷键 menu click, addressed to a window role. */
+export interface MenuAction {
+  target: Role
+  action: string
+}
+
+/** onMenuAction receives a 快捷键 menu click meant for this window. The event
+ * name is literal like app:config: the generator skips events emitted from a
+ * //wails:ignore method. */
+export function onMenuAction(role: Role, fn: (action: string) => void): () => void {
+  return Events.On('app:menu-action', (ev: { data: MenuAction }) => {
+    if (ev.data && ev.data.target === role) fn(ev.data.action)
+  })
+}
+
+// onConfig reports every saved change. A window reads 窗口配置 when it mounts,
+// so without this a toggle in settings would only reach the next launch.
+export function onConfig(fn: () => void): () => void {
+  return Events.On('app:config', () => fn())
+}
+
 // A single element reused for every read-aloud: creating one per click leaves
 // the previous voice playing underneath the new one.
 let clip: HTMLAudioElement | null = null
+// playingKey names the request the shared player is on. Speaker buttons read it
+// through usePlayingKey to turn into 停止 while that clip sounds, the way
+// EasyDict's EZAudioButton swaps its glyph, and ⌘S uses it to decide play or stop.
+let playingKey = ''
+const playingSubscribers = new Set<() => void>()
+
+function announcePlaying(key: string) {
+  if (playingKey === key) return
+  playingKey = key
+  for (const notify of playingSubscribers) notify()
+}
+
+/** usePlayingKey is the key of the clip currently sounding, or ''. Components
+ * compare it with speechKey(...) to show the stop state on their own button. */
+export function usePlayingKey(): string {
+  return useSyncExternalStore(
+    (notify) => {
+      playingSubscribers.add(notify)
+      return () => {
+        playingSubscribers.delete(notify)
+      }
+    },
+    () => playingKey,
+    () => '',
+  )
+}
 
 export async function speak(text: string, lang: string, slow = false): Promise<string> {
   if (!text.trim()) return ''
@@ -94,11 +142,17 @@ export async function speak(text: string, lang: string, slow = false): Promise<s
   if (!source || result.error) {
     return result.error || '没有可用的朗读服务'
   }
-  if (!clip) clip = new Audio()
+  if (!clip) {
+    clip = new Audio()
+    // A clip that runs to its end is no longer playing, so the button goes back
+    // to 朗读 without the user having to press stop on silence.
+    clip.addEventListener('ended', () => announcePlaying(''))
+  }
   clip.src = source
   clip.playbackRate = slow ? 0.7 : 1
   clip.onerror = null
   await clip.play().catch(() => undefined)
+  announcePlaying(speechKey(text, lang, slow))
   return ''
 }
 
@@ -107,6 +161,7 @@ export function stopSpeech() {
     clip.pause()
     clip.src = ''
   }
+  announcePlaying('')
 }
 
 /** readAloud speaks and reports what stopped it. A missing voice used to fail in
@@ -117,10 +172,38 @@ export function readAloud(text: string, lang: string, slow = false, notice?: (ms
   })
 }
 
+/** toggleSpeech is what a speaker button or ⌘S presses: EasyDict's audio button
+ * stops the clip it is already playing, and only then does it start a new one. */
+export function toggleSpeech(text: string, lang: string, slow = false, notice?: (msg: string) => void) {
+  const playing = !!clip && !clip.paused
+  if (stopsPlayback(playing, playingKey, text, lang, slow)) {
+    stopSpeech()
+    return Promise.resolve()
+  }
+  return readAloud(text, lang, slow, notice)
+}
+
 /** openURL hands a link to the browser. An anchor inside a model's answer would
  * otherwise navigate the window away from the result the user is still reading. */
 export function openURL(url: string) {
   if (!/^https?:\/\//i.test(url)) return
+  void Browser.OpenURL(url).catch(() => undefined)
+}
+
+/** openQuickLink is the titlebar's 快捷链接: besides web links it accepts the
+ * dictionary apps' own schemes (dict://, eudic://), which openURL refuses
+ * because a link inside an answer has no business starting another app. Go
+ * waits for the system to accept the URL, so a Mac without Eudic can say the
+ * chip has nothing to open instead of doing nothing. */
+export function openQuickLink(url: string): Promise<boolean> {
+  if (!/^(https?:\/\/|dict:\/\/|eudic:\/\/)/i.test(url)) return Promise.resolve(false)
+  return Service.OpenQuickLink(url).then(() => true, () => false)
+}
+
+/** openSystemSettings opens a macOS System Settings pane. 苹果离线翻译 points at
+ * 管理下载语言, whose only correct destination is that pane. */
+export function openSystemSettings(url: string) {
+  if (!/^x-apple\.systempreferences:/i.test(url)) return
   void Browser.OpenURL(url).catch(() => undefined)
 }
 
@@ -154,6 +237,25 @@ export function prettyShortcut(accel: string): string {
     .join(isMac ? '' : '+')
 }
 
+/** accelLabel is the bare "⌘P" for inline hints; unbound actions return ''. */
+export function accelLabel(
+  cfg: { appShortcuts?: Record<string, string | undefined> | null } | null | undefined,
+  action: AppAction,
+): string {
+  const accel = appAccel(cfg, action)
+  return accel ? prettyShortcut(accel) : ''
+}
+
+/** accelHint is the ", ⌘P" tail tooltips append; an unbound action adds
+ * nothing, because naming a key that no longer fires would be a lie. */
+export function accelHint(
+  cfg: { appShortcuts?: Record<string, string | undefined> | null } | null | undefined,
+  action: AppAction,
+): string {
+  const label = accelLabel(cfg, action)
+  return label ? `, ${label}` : ''
+}
+
 /** applyTheme is the one place that decides light versus dark; `auto` follows
  * the OS, which Wails already reports through the WebView's media query. */
 export function applyTheme(theme: string) {
@@ -166,7 +268,7 @@ export function timeAgo(unixSeconds: number): string {
   if (seconds < 3600) return t('{n} 分钟前', { n: Math.floor(seconds / 60) })
   if (seconds < 86400) return t('{n} 小时前', { n: Math.floor(seconds / 3600) })
   if (seconds < 86400 * 7) return t('{n} 天前', { n: Math.floor(seconds / 86400) })
-  return new Date(unixSeconds * 1000).toLocaleDateString()
+  return new Date(unixSeconds * 1000).toLocaleDateString(uiLocale() === 'en' ? 'en-US' : undefined)
 }
 
 // One fetch of the language table serves every window: the codes services
@@ -198,6 +300,43 @@ export function useLangNames(): Record<string, string> {
 export function langName(code: string | undefined, names: Record<string, string>): string {
   if (!code || code === 'auto') return ''
   return names[code] ?? names[code.toLowerCase()] ?? ''
+}
+
+/** pickableLangs drops the codes a picker must not offer: 自动检测 is a
+ * source-only sentinel, and 古文 is a genre the recogniser reports rather than a
+ * language a service accepts. */
+export function pickableLangs<T extends { code: string }>(langs: T[]): T[] {
+  return langs.filter((l) => l.code !== 'auto' && l.code !== 'zh-classical')
+}
+
+// The flags are EasyDict's own table (EZLanguageModel), down to English being
+// 🇬🇧 and 繁体中文 🇭🇰: the picker is a language chooser, not a locale switch.
+// 自动 wears 🌐 until a query has been detected.
+// Windows' emoji font draws regional indicators as two letters, so flags are
+// only drawn on macOS.
+const languageFlags: Record<string, string> = {
+  auto: '🌐',
+  'zh-CN': '🇨🇳', 'zh-TW': '🇭🇰', 'zh-classical': '📜', en: '🇬🇧', ja: '🇯🇵', ko: '🇰🇷',
+  fr: '🇫🇷', de: '🇩🇪', es: '🇪🇸', ru: '🇷🇺', it: '🇮🇹', pt: '🇵🇹', 'pt-BR': '🇧🇷', th: '🇹🇭', vi: '🇻🇳',
+  ar: '🇸🇦', nl: '🇳🇱', pl: '🇵🇱', tr: '🇹🇷', fa: '🇮🇷', hi: '🇮🇳', id: '🇮🇩', ms: '🇲🇾',
+  sv: '🇸🇪', no: '🇳🇴', da: '🇩🇰', fi: '🇫🇮', cs: '🇨🇿', sk: '🇸🇰', hu: '🇭🇺', ro: '🇷🇴',
+  bg: '🇧🇬', el: '🇬🇷', uk: '🇺🇦', he: '🇮🇱', ca: '🇪🇸', et: '🇪🇪', lv: '🇱🇻', lt: '🇱🇹',
+  sl: '🇸🇮', hr: '🇭🇷', sr: '🇷🇸', mk: '🇲🇰', sq: '🇦🇱', hy: '🇦🇲', az: '🇦🇿', be: '🇧🇾',
+  ka: '🇬🇪', kk: '🇰🇿', ky: '🇰🇬', lo: '🇱🇦', my: '🇲🇲', ne: '🇳🇵', mn: '🇲🇳', tl: '🇵🇭',
+}
+
+/** flagFor is the emoji a language wears in the pickers, blank on Windows and
+ * for tags with no entry. */
+export function flagFor(code: string | undefined): string {
+  if (!isMac || !code) return ''
+  return languageFlags[code] ?? languageFlags[code.toLowerCase()] ?? ''
+}
+
+/** langOption is one row of a picker: EasyDict's menus print the flag before
+ * the name ("🇬🇧 English"), and the closed button keeps name then flag. */
+export function langOption(code: string, name: string): string {
+  const flag = flagFor(code)
+  return flag ? `${flag} ${name}` : name
 }
 
 /** useWhere names the contexts and shortcut slots a result can come from. A

@@ -21,7 +21,7 @@ func TestUpdateReportNamesBothSides(t *testing.T) {
 	srv := serveRelease(t, `{"tag_name":"1.2.0","html_url":"https://example.test/r","body":"`+long+`"}`)
 
 	s := &Service{version: "1.1.0"}
-	report, err := s.updateReport(srv.URL)
+	report, err := s.updateReport(srv.URL, false)
 	if err != nil {
 		t.Fatalf("updateReport: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestUpdateReportNamesBothSides(t *testing.T) {
 
 func TestUpdateReportStaysQuietWhenTheBuildIsCurrent(t *testing.T) {
 	srv := serveRelease(t, `{"tag_name":"1.0.0","html_url":"https://example.test/r"}`)
-	report, err := (&Service{version: "1.0.0"}).updateReport(srv.URL)
+	report, err := (&Service{version: "1.0.0"}).updateReport(srv.URL, false)
 	if err != nil {
 		t.Fatalf("updateReport: %v", err)
 	}
@@ -52,8 +52,30 @@ func TestUpdateReportStaysQuietWhenTheBuildIsCurrent(t *testing.T) {
 }
 
 func TestUpdateReportRefusesAnEmptySource(t *testing.T) {
-	if _, err := (&Service{version: "1.0.0"}).updateReport(""); err == nil ||
+	if _, err := (&Service{version: "1.0.0"}).updateReport("", false); err == nil ||
 		!strings.Contains(err.Error(), "未设置更新源") {
 		t.Errorf("err = %v, want 说明没有更新源", err)
+	}
+}
+
+func TestUpdateReportCarriesIncludeBeta(t *testing.T) {
+	srv := serveRelease(t, `[
+		{"tag_name":"v1.1.0-beta.1","html_url":"https://example.test/beta","prerelease":true},
+		{"tag_name":"v1.0.0","html_url":"https://example.test/stable"}
+	]`)
+	s := &Service{version: "1.0.0"}
+	quiet, err := s.updateReport(srv.URL, false)
+	if err != nil {
+		t.Fatalf("updateReport: %v", err)
+	}
+	if quiet.Version != "" {
+		t.Errorf("没有打开包括 Beta 时不该报出预发布版本: %+v", quiet)
+	}
+	beta, err := s.updateReport(srv.URL, true)
+	if err != nil {
+		t.Fatalf("updateReport: %v", err)
+	}
+	if beta.Version != "v1.1.0-beta.1" || beta.URL != "https://example.test/beta" {
+		t.Errorf("打开包括 Beta 后应该报出预发布版本: %+v", beta)
 	}
 }

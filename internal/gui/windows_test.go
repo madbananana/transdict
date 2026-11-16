@@ -46,15 +46,57 @@ func TestAuxWindowTitlesFollowTheInterfaceLanguage(t *testing.T) {
 	if got := settingsWindowTitle(); got != "Transdict 设置" {
 		t.Errorf("中文标题 = %q", got)
 	}
-	if got := historyWindowTitle(); got != "Transdict 历史记录" {
-		t.Errorf("中文标题 = %q", got)
-	}
 	l10n.Set("en")
 	if got := settingsWindowTitle(); got != "Transdict Settings" {
 		t.Errorf("English 标题 = %q, want Transdict Settings", got)
 	}
-	if got := historyWindowTitle(); got != "Transdict History" {
-		t.Errorf("English 标题 = %q, want Transdict History", got)
+}
+
+// The settings window keeps one size whichever tab is open: switching pages
+// must not make the frame jump, so 关于 and 隐私 get the same column as 高级.
+func TestSettingsWindowKeepsOneSizeAcrossTabs(t *testing.T) {
+	if settingsWindowWidth != 960 {
+		t.Errorf("宽 = %d, want 960", settingsWindowWidth)
+	}
+	if settingsWindowHeight != 720 {
+		t.Errorf("高 = %d, want 720", settingsWindowHeight)
+	}
+}
+
+// The settings window carries the tab name, not the app name, in its title.
+func TestSettingsTabTitlesFollowTheSelectedPage(t *testing.T) {
+	defer l10n.Set("zh-CN")
+	l10n.Set("zh-CN")
+	names := map[string]string{
+		"general": "通用", "services": "服务", "favorites": "收藏", "disabled": "禁止名单",
+		"shortcuts": "快捷键", "advanced": "高级", "privacy": "隐私", "about": "关于",
+	}
+	for page, want := range names {
+		if got := settingsTabTitle(page); got != want {
+			t.Errorf("%s = %q, want %q", page, got, want)
+		}
+	}
+	if got := settingsTabTitle("old-page"); got != "通用" {
+		t.Errorf("unknown page = %q, want the default 通用", got)
+	}
+	l10n.Set("en")
+	if got := settingsTabTitle("about"); got != "About" {
+		t.Errorf("English = %q, want About", got)
+	}
+}
+
+// 关于 hands the settings page over exactly once: raising preferences from the
+// tray afterwards must not land on 关于 again.
+func TestTakeSettingsPageHandsOverOnce(t *testing.T) {
+	s := &Service{}
+	s.mu.Lock()
+	s.requestedPage = "about"
+	s.mu.Unlock()
+	if got := s.TakeSettingsPage(); got != "about" {
+		t.Errorf("第一次 = %q, want about", got)
+	}
+	if got := s.TakeSettingsPage(); got != "" {
+		t.Errorf("第二次 = %q, want 空", got)
 	}
 }
 
@@ -117,42 +159,47 @@ func TestFrameNeedsAReachablePartOnScreen(t *testing.T) {
 	}
 }
 
-// 详情 means "this answer, larger": a floating-panel reply has to travel to the
-// main window intact, while an answer the panel already owns is left alone.
-func TestDetailOfPromotesOnlyFloatingAnswers(t *testing.T) {
-	base := &query.Response{
-		ID: "q1", Context: settings.ContextFloating, Mode: "selection",
-		SourceText: "hello",
-		Translate:  []translate.Result{{Label: "Google", Text: "你好"}},
-		Dict:       []dict.Result{{Label: "苹果词典"}},
+// 自动复制 OCR 文本 is for the screenshot answer only: the silent OCR already
+// writes the clipboard, and a partial emit has not recognized everything yet.
+func TestOCRTextIsCopiedOnlyForScreenshotAnswers(t *testing.T) {
+	shot := &query.Response{Context: settings.ContextScreenshot, SourceText: "hello"}
+	if got := ocrCopyText(settings.Config{AutoCopyOCR: true}, shot); got != "hello" {
+		t.Errorf("开启后 = %q, want the recognized text", got)
 	}
-	d, ok := detailOf(base)
-	if !ok || d.Context != settings.ContextMain {
-		t.Fatalf("detail = %+v ok=%v, want the answer promoted to the main window", d, ok)
+	if got := ocrCopyText(settings.Config{}, shot); got != "" {
+		t.Errorf("关闭后 = %q, want nothing", got)
 	}
-	if d.SourceText != "hello" || d.Mode != "selection" || len(d.Translate) != 1 || len(d.Dict) != 1 {
-		t.Errorf("promoted answer lost part of itself: %+v", d)
+	partial := &query.Response{Context: settings.ContextScreenshot, SourceText: "hello", Partial: true}
+	if got := ocrCopyText(settings.Config{AutoCopyOCR: true}, partial); got != "" {
+		t.Errorf("半成品 = %q, want nothing", got)
 	}
-	if base.Context != settings.ContextFloating {
-		t.Error("the stored answer was rewritten instead of copied")
+	elsewhere := &query.Response{Context: settings.ContextMain, SourceText: "hello"}
+	if got := ocrCopyText(settings.Config{AutoCopyOCR: true}, elsewhere); got != "" {
+		t.Errorf("主窗口查询 = %q, want nothing", got)
 	}
-	// A retry may write into the stored snapshot; the panel's copy must not move.
-	base.Translate[0].Text = "changed"
-	if d.Translate[0].Text != "你好" {
-		t.Errorf("promoted translation = %q, want an independent copy", d.Translate[0].Text)
+	if got := ocrCopyText(settings.Config{AutoCopyOCR: true}, nil); got != "" {
+		t.Errorf("没有结果 = %q, want nothing", got)
 	}
+}
 
-	if _, ok := detailOf(&query.Response{Context: settings.ContextMain}); ok {
-		t.Error("a main-window answer does not need promoting")
+// 自动复制划词文本 only applies to the two selection modes: an input-box query
+// and a link must not overwrite the clipboard.
+func TestSelectedTextIsCopiedOnlyForSelectionQueries(t *testing.T) {
+	cfg := settings.Config{AutoCopySelect: true}
+	if got := selectionCopyText(cfg, "selection", "hello"); got != "hello" {
+		t.Errorf("快捷键划词 = %q, want the text", got)
 	}
-	if _, ok := detailOf(nil); ok {
-		t.Error("nothing to promote")
+	if got := selectionCopyText(cfg, "auto-selection", "hello"); got != "hello" {
+		t.Errorf("鼠标划词 = %q, want the text", got)
 	}
-	if odict, ok := detailOf(&query.Response{Context: settings.ContextODict}); !ok || odict.Context != settings.ContextMain {
-		t.Error("鼠标取词 answers reach the same floating panel and must promote too")
+	if got := selectionCopyText(cfg, "input", "hello"); got != "" {
+		t.Errorf("输入框查询 = %q, want nothing", got)
 	}
-	if mini, ok := detailOf(&query.Response{Context: settings.ContextMini}); !ok || mini.Context != settings.ContextMain {
-		t.Error("迷你窗 answers show one line and still need 详情")
+	if got := selectionCopyText(settings.Config{}, "selection", "hello"); got != "" {
+		t.Errorf("关闭后 = %q, want nothing", got)
+	}
+	if got := selectionCopyText(cfg, "selection", ""); got != "" {
+		t.Errorf("空文本 = %q, want nothing", got)
 	}
 }
 
@@ -196,5 +243,28 @@ func TestShortcutProblemsAreCopiedBothWays(t *testing.T) {
 	s.SetShortcutProblems(nil)
 	if got := s.ShortcutProblems(); len(got) != 0 {
 		t.Errorf("cleared list = %v, want empty", got)
+	}
+}
+
+// EasyDict keeps every query window's top edge put when its answer grows: once
+// the window reaches the screen bottom the answer scrolls inside it, instead of
+// the window sliding up and covering the text the user selected.
+func TestFittedHeightKeepsTheTopEdge(t *testing.T) {
+	cases := []struct {
+		name                                        string
+		content, floor, maxH, workBottom, top, want int
+	}{
+		{"content drives the height", 240, 140, 940, 904, 100, 240},
+		{"floor wins over a short answer", 40, 140, 940, 904, 100, 140},
+		{"percentage caps the height", 2000, 140, 600, 904, 100, 600},
+		{"screen bottom caps it, not the top edge", 800, 140, 940, 904, 700, 196},
+		{"floor survives the screen test", 800, 140, 940, 904, 880, 140},
+		{"no screen reading keeps the content", 800, 140, 940, 0, 700, 800},
+	}
+	for _, c := range cases {
+		if got := fittedHeight(c.content, c.floor, c.maxH, c.workBottom, c.top); got != c.want {
+			t.Errorf("%s: fittedHeight(%d,%d,%d,%d,%d) = %d, want %d",
+				c.name, c.content, c.floor, c.maxH, c.workBottom, c.top, got, c.want)
+		}
 	}
 }

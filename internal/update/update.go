@@ -38,20 +38,27 @@ type Release struct {
 
 // manifest accepts the two shapes a release can be published in: the flat
 // document this app would serve itself, and a GitHub Releases API entry, whose
-// tag_name/html_url/body say the same three things in other words.
+// tag_name/html_url/body say the same three things in other words. prerelease
+// only appears in the list GitHub returns rather than in one entry.
 type manifest struct {
-	Version string `json:"version"`
-	Tag     string `json:"tag_name"`
-	URL     string `json:"url"`
-	HTMLURL string `json:"html_url"`
-	Notes   string `json:"notes"`
-	Body    string `json:"body"`
+	Version    string `json:"version"`
+	Tag        string `json:"tag_name"`
+	URL        string `json:"url"`
+	HTMLURL    string `json:"html_url"`
+	Notes      string `json:"notes"`
+	Body       string `json:"body"`
+	Prerelease bool   `json:"prerelease"`
 }
 
 // Fetch reads the manifest at url. Anything that does not name a version is an
 // error rather than a quiet 已是最新, because a wrong url would otherwise look
 // like an up-to-date app forever.
-func Fetch(ctx context.Context, url string) (*Release, error) {
+//
+// includeBeta decides whether pre-release entries count. GitHub's /releases
+// endpoint answers with a list, newest first, so a source can carry betas next
+// to published builds; without the switch they are skipped rather than offered
+// as an update.
+func Fetch(ctx context.Context, url string, includeBeta bool) (*Release, error) {
 	if strings.TrimSpace(url) == "" {
 		return nil, errors.New("未设置更新源")
 	}
@@ -75,27 +82,57 @@ func Fetch(ctx context.Context, url string) (*Release, error) {
 	if err != nil {
 		return nil, fmt.Errorf("读取更新源失败: %w", err)
 	}
-	var m manifest
-	if err := json.Unmarshal(data, &m); err != nil {
+	return pick(data, includeBeta)
+}
+
+// pick reads whichever shape the source answered with and returns the release
+// the user should hear about, or nil when every entry is a pre-release and the
+// switch is off.
+func pick(data []byte, includeBeta bool) (*Release, error) {
+	var list []manifest
+	body := strings.TrimSpace(string(data))
+	if body == "" {
 		return nil, errors.New("更新源返回的不是发布文件")
 	}
-	rel := &Release{
-		Version: firstOf(m.Version, m.Tag),
-		URL:     firstOf(m.URL, m.HTMLURL),
-		Notes:   firstOf(m.Notes, m.Body),
+	if body[0] == '[' {
+		if err := json.Unmarshal(data, &list); err != nil {
+			return nil, errors.New("更新源返回的不是发布文件")
+		}
+	} else {
+		var m manifest
+		if err := json.Unmarshal(data, &m); err != nil {
+			return nil, errors.New("更新源返回的不是发布文件")
+		}
+		list = []manifest{m}
 	}
-	if rel.Version == "" {
+	named := false
+	for _, m := range list {
+		rel := &Release{
+			Version: firstOf(m.Version, m.Tag),
+			URL:     firstOf(m.URL, m.HTMLURL),
+			Notes:   firstOf(m.Notes, m.Body),
+		}
+		if rel.Version == "" {
+			continue
+		}
+		named = true
+		if !includeBeta && (m.Prerelease || suffix(rel.Version) != "") {
+			continue
+		}
+		return rel, nil
+	}
+	if !named {
 		return nil, errors.New("发布文件没有版本号")
 	}
-	return rel, nil
+	return nil, nil
 }
 
 // Check is the one call the app makes: it reports the release to install when
 // the source is ahead of the running version, and nothing when it is not. The
 // caller decides whether 没有新版本 is a sentence or silence.
-func Check(ctx context.Context, url, current string) (*Release, error) {
-	rel, err := Fetch(ctx, url)
-	if err != nil {
+func Check(ctx context.Context, url, current string, includeBeta bool) (*Release, error) {
+	rel, err := Fetch(ctx, url, includeBeta)
+	if err != nil || rel == nil {
 		return nil, err
 	}
 	if !Newer(current, rel.Version) {

@@ -33,6 +33,21 @@ export interface Request {
      * Easydict's 词典模式.
      */
     "dictionaryOnly"?: boolean;
+
+    /**
+     * Service names one provider kind to run alone, which is how the local HTTP
+     * API answers an explicit serviceType. It bypasses the window selection:
+     * the caller asked for Google, not for whatever this window runs.
+     */
+    "service"?: string;
+
+    /**
+     * Replaceable records that the query came from a live selection in an
+     * editable field, so a result card may offer 替换 (EasyDict's
+     * showReplaceButton). It is decided where the selection is read, because by
+     * the time the answer lands the field may no longer be focused.
+     */
+    "replaceable"?: boolean;
 }
 
 /**
@@ -45,6 +60,13 @@ export interface Response {
     "mode": string;
     "sourceText": string;
     "detected": string;
+
+    /**
+     * SourceLang is the language the answer was read as, when the query named
+     * one — a picker choice or a 识别为 correction. Empty means the services
+     * detected it, and 重试 may detect again.
+     */
+    "sourceLang"?: string;
     "targetLang": string;
     "cropDataURL"?: string;
     "ocr"?: ocr$0.Outcome[] | null;
@@ -52,6 +74,12 @@ export interface Response {
     "translate"?: translate$0.Result[] | null;
     "elapsedMs": number;
     "error"?: string;
+
+    /**
+     * Replaceable lets every result card offer 替换: clicking it puts that card's
+     * answer back over the selection the query was made from.
+     */
+    "replaceable"?: boolean;
 
     /**
      * Partial marks a first sketch sent as soon as the text exists — for a

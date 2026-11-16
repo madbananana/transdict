@@ -3,10 +3,16 @@ package gui
 import (
 	"context"
 	"errors"
+	"log"
+	"regexp"
 	"strings"
+	"unicode"
 
+	"transdict/internal/capture"
+	"transdict/internal/dict"
 	"transdict/internal/history"
 	"transdict/internal/l10n"
+	"transdict/internal/langs"
 	"transdict/internal/query"
 	"transdict/internal/settings"
 	"transdict/internal/translate"
@@ -21,6 +27,11 @@ func (s *Service) Ask(req query.Request) error {
 	if text == "" && len(req.Image) == 0 {
 		return errors.New("没有内容可查询")
 	}
+	// 润色/总结 ask about the text itself; cleaning it would change what the
+	// user pointed at. Every other text query gets the two cleanup options.
+	if req.Prompt == "" {
+		text = cleanQueryText(text, s.cfg.Get())
+	}
 	req.Text = text
 	if req.Context == "" {
 		req.Context = settings.ContextMain
@@ -28,24 +39,217 @@ func (s *Service) Ask(req query.Request) error {
 	if req.Mode == "" {
 		req.Mode = req.Context
 	}
-	switch target(req.Context) {
-	case WindowFloat:
-		w, h := s.floatSize()
-		s.ensure(WindowFloat, "/#/float", w, h, true)
-		s.placeFloat(w, h)
-	case WindowMini:
-		s.ensure(WindowMini, "/#/mini", 380, 110, true)
+	s.copySelection(req.Mode, text)
+	s.run(req)
+	return nil
+}
+
+var (
+	commentPrefix = regexp.MustCompile(`^\s*(//+|#+|\*+)\s*`)
+	commentBlock  = regexp.MustCompile(`(?s)/\*+(.*?)\*+/`)
+	lineBreak     = regexp.MustCompile(`[ \t]*\r?\n[ \t]*`)
+)
+
+// cleanQueryText applies Easydict's two query-time options: 查询时自动移除代码
+// 注释符号 and 查询时自动替换换行符. It runs before the text is stored, so the
+// history row and the source card show what the services were actually asked.
+func cleanQueryText(text string, cfg settings.Config) string {
+	// Same order as Easydict's handleInputText: words first, then comment
+	// markers, then line breaks.
+	if cfg.AutoWordSegment {
+		text = segmentWords(text)
 	}
-	// A query replaces whatever this window was still waiting on: the earlier
-	// request is cancelled and its ticket stops matching, so a slow answer cannot
-	// land after the newer one and take over the window, the history row or the
-	// clipboard.
+	if cfg.AutoRemoveComments {
+		text = stripComments(text)
+	}
+	if cfg.ReplaceNewlineSpace {
+		text = lineBreak.ReplaceAllString(text, " ")
+	}
+	return strings.TrimSpace(text)
+}
+
+// TransformText applies one of the titlebar 快捷动作 to the query text. The
+// rewriting lives here rather than in the window so the menu, the query-time
+// options and the dictionary fallback all share one definition of 分词,
+// 去除注释 and 换行转空格.
+func (s *Service) TransformText(text, action string) string {
+	switch action {
+	case "newline":
+		return strings.TrimSpace(lineBreak.ReplaceAllString(text, " "))
+	case "comments":
+		return strings.TrimSpace(stripComments(text))
+	case "words":
+		return strings.TrimSpace(segmentWords(text))
+	}
+	return text
+}
+
+// knownWord is Dictionary Services on macOS; a variable so the segmentation
+// tests do not depend on which dictionaries the machine has installed.
+var knownWord = dict.IsEnglishWord
+
+// quotePairs is what a quoted selection may be wrapped in. A quoted token loses
+// its quotes rather than being split: 'UIKit' is a name, not a sentence.
+var quotePairs = map[rune]rune{
+	'"': '"', '\'': '\'', '“': '”', '‘': '’', '「': '」', '『': '』',
+}
+
+// segmentWords is 查询时自动分词, narrower than the label suggests: only a
+// single token is split, because a sentence already has its spaces. A real word
+// the dictionary knows (iPad, LaTeX) stays whole — that check is what keeps the
+// splitter from breaking names apart.
+func segmentWords(text string) string {
+	if !isSingleWord(text) {
+		return text
+	}
+	if quoted, ok := trimQuotePair(text); ok {
+		return quoted
+	}
+	if !needsSegmentation(text) || knownWord(text) {
+		return text
+	}
+	return splitIdentifier(text)
+}
+
+func isSingleWord(text string) bool {
+	return text != "" && !strings.ContainsFunc(text, unicode.IsSpace)
+}
+
+// needsSegmentation looks for the two marks an identifier carries: snake_case
+// underscores, or a capital that starts a word inside a longer token.
+func needsSegmentation(text string) bool {
+	if strings.ContainsRune(text, '_') {
+		return true
+	}
+	runes := []rune(text)
+	for i := 1; i < len(runes); i++ {
+		if !unicode.IsUpper(runes[i]) {
+			continue
+		}
+		if unicode.IsLower(runes[i-1]) {
+			return true
+		}
+		if i+1 < len(runes) && unicode.IsLower(runes[i+1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func splitIdentifier(text string) string {
+	parts := strings.Split(strings.ReplaceAll(text, "_", " "), " ")
+	kept := parts[:0]
+	for _, p := range parts {
+		if p != "" {
+			kept = append(kept, splitCamel(p))
+		}
+	}
+	return strings.Join(kept, " ")
+}
+
+// splitCamel follows Easydict's rule: a space goes before every capital that
+// follows a lowercase letter, and before a capital that starts a new word after
+// an acronym ("GetHTTPCode" → "Get HTTP Code").
+func splitCamel(word string) string {
+	runes := []rune(word)
+	var b strings.Builder
+	for i, r := range runes {
+		if i > 0 && unicode.IsUpper(r) {
+			prev := runes[i-1]
+			if unicode.IsLower(prev) || (i+1 < len(runes) && unicode.IsLower(runes[i+1])) {
+				b.WriteByte(' ')
+			}
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func trimQuotePair(text string) (string, bool) {
+	runes := []rune(text)
+	if len(runes) < 3 {
+		return text, false
+	}
+	closing, ok := quotePairs[runes[0]]
+	if !ok || runes[len(runes)-1] != closing {
+		return text, false
+	}
+	return string(runes[1 : len(runes)-1]), true
+}
+
+// stripComments drops the markers a code selection carries. When every line is
+// a comment, the prefixes go and the lines become one sentence; otherwise the
+// text is code with maybe an inline /* ... */ note, and only that note is
+// unwrapped.
+func stripComments(text string) string {
+	lines := strings.Split(text, "\n")
+	commented := 0
+	for _, ln := range lines {
+		if strings.TrimSpace(ln) == "" {
+			continue
+		}
+		if !commentPrefix.MatchString(ln) {
+			return unwrapCommentBlocks(text)
+		}
+		commented++
+	}
+	if commented == 0 {
+		return text
+	}
+	kept := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		if ln = strings.TrimSpace(commentPrefix.ReplaceAllString(ln, "")); ln != "" {
+			kept = append(kept, ln)
+		}
+	}
+	return joinLines(kept)
+}
+
+func unwrapCommentBlocks(text string) string {
+	return commentBlock.ReplaceAllStringFunc(text, func(block string) string {
+		inner := commentBlock.FindStringSubmatch(block)[1]
+		var kept []string
+		for _, ln := range strings.Split(inner, "\n") {
+			if ln = strings.TrimSpace(commentPrefix.ReplaceAllString(ln, "")); ln != "" {
+				kept = append(kept, ln)
+			}
+		}
+		return joinLines(kept)
+	})
+}
+
+// joinLines glues comment lines back into one sentence, keeping a space only
+// between two Latin boundaries: Chinese lines would read with a gap otherwise.
+func joinLines(lines []string) string {
+	var b strings.Builder
+	for i, ln := range lines {
+		if i > 0 && needsSpace(lines[i-1], ln) {
+			b.WriteByte(' ')
+		}
+		b.WriteString(ln)
+	}
+	return b.String()
+}
+
+func needsSpace(before, after string) bool {
+	left, right := []rune(before), []rune(after)
+	if len(left) == 0 || len(right) == 0 {
+		return false
+	}
+	return left[len(left)-1] < 128 && right[0] < 128
+}
+
+// run starts the pipeline. A query replaces whatever this window was still
+// waiting on: the earlier request is cancelled and its ticket stops matching, so
+// a slow answer cannot land after the newer one and take over the window, the
+// history row or the clipboard. It leaves window placement alone — 遮挡后重识别
+// happens inside the open window.
+func (s *Service) run(req query.Request) {
 	runCtx, ticket, cancel := s.beginRun(req.Context)
 	go func() {
 		defer cancel()
 		s.execute(runCtx, req, ticket)
 	}()
-	return nil
 }
 
 // QueryText runs text the caller already has: the input window and the
@@ -54,9 +258,16 @@ func (s *Service) QueryText(text, context string) error {
 	return s.Ask(query.Request{Text: text, Context: context, Mode: "input"})
 }
 
-// MiniQuery answers in the always-on-top mini window.
-func (s *Service) MiniQuery(text string) error {
-	return s.Ask(query.Request{Text: text, Context: settings.ContextMini, Mode: "mini"})
+// QueryInApp is EasyDict's query_in_app: the context menu on a query box runs
+// the word it was opened on, so a word read in an answer can be looked up
+// without retyping it. Every query lands in the same window, so there is no
+// window to choose between.
+func (s *Service) QueryInApp(text, from string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return errors.New("没有内容")
+	}
+	return s.Ask(query.Request{Text: text, Context: settings.ContextMain, Mode: "input"})
 }
 
 // ClipboardQuery reads the pasteboard and translates it — 剪贴板翻译, which needs
@@ -69,23 +280,32 @@ func (s *Service) ClipboardQuery() error {
 	return s.Ask(query.Request{Text: text, Context: settings.ContextClipboard, Mode: "clipboard"})
 }
 
-// ClipboardMini feeds the pasteboard to the mini window, which is the always-on
-// reading companion: copy a sentence in any app, hit the shortcut, see the
-// translation in a two-line panel pinned to the corner.
-func (s *Service) ClipboardMini() error {
-	text := s.clipboardText()
-	if text == "" {
-		return errors.New("剪贴板为空")
-	}
-	return s.MiniQuery(text)
-}
-
 func (s *Service) clipboardText() string {
 	text, ok := s.wails.Clipboard.Text()
 	if !ok {
 		return ""
 	}
 	return strings.TrimSpace(text)
+}
+
+// ClipboardOCR recognizes the picture on the pasteboard — 剪贴板 OCR. It is the
+// screenshot gesture without the screenshot: a picture already copied from a
+// PDF, a chat or another screen goes to the same OCR 窗口 EasyDict opens.
+func (s *Service) ClipboardOCR() error {
+	img, err := capture.ClipboardImage()
+	if err != nil {
+		return err
+	}
+	go s.runOCRPreview(img)
+	return nil
+}
+
+// OpenLastOCR is 显示 OCR 窗口: the preview is reopened with whatever was
+// recognized last, or empty before the first recognition. EasyDict opens the
+// window unconditionally, so this does too.
+func (s *Service) OpenLastOCR() error {
+	s.showOCRPreview()
+	return nil
 }
 
 // Prompt runs an ad-hoc instruction (润色 / 总结 / 语气改写) over the AI-capable
@@ -169,7 +389,32 @@ func (s *Service) execute(runCtx context.Context, req query.Request, ticket uint
 	}
 	res.Context = req.Context
 	res.Mode = req.Mode
+	res.Replaceable = req.Replaceable
+	// The named source survives into the answer so 重试 asks the same reading.
+	// 自动检测 leaves it empty and a retry is free to detect again.
+	if req.SourceLang != "" && req.SourceLang != langs.Auto {
+		res.SourceLang = req.SourceLang
+	}
 	s.annotate(res, cfg, req)
+	// 调试日志 keeps the shape of an answer — stages, counts, elapsed — and
+	// never the text the user asked about.
+	failed := 0
+	for _, t := range res.Translate {
+		if t.Error != "" {
+			failed++
+		}
+	}
+	for _, d := range res.Dict {
+		if d.Error != "" {
+			failed++
+		}
+	}
+	panel := ""
+	if res.Error != "" {
+		panel = ", panel error"
+	}
+	log.Printf("transdict: query %s: %d translate (%d failed), %d dict, %d ocr, %dms%s",
+		req.Context, len(res.Translate), failed, len(res.Dict), len(res.OCR), res.ElapsedMs, panel)
 	s.emit(res)
 }
 
@@ -197,6 +442,16 @@ func (s *Service) annotate(res *query.Response, cfg settings.Config, req query.R
 		return
 	}
 	if res.Error != "" {
+		return
+	}
+	if len(req.Image) > 0 && !cfg.AutoQueryOCR && len(res.OCR) > 0 {
+		// 图片 OCR 后自动查询 off: the recognized text is the whole answer, so the
+		// missing translations are not a missing service.
+		return
+	}
+	if len(req.Image) > 0 && query.WholeURL(res.SourceText) {
+		// A recognized link is its own answer: the engine returned early on
+		// purpose, so no translation is missing and no service is to blame.
 		return
 	}
 	hidden := false
@@ -237,9 +492,9 @@ func sameText(a, b string) bool {
 	return strings.Join(strings.Fields(a), " ") == strings.Join(strings.Fields(b), " ")
 }
 
-// LastResult re-sends the previous response so a window opened after the query —
-// the floating and mini panels are lazy — can render what already happened. It is
-// a fresh draw, so it words itself in the language the window will show.
+// LastResult re-sends the previous response so a window opened after the query
+// can render what already happened. It is a fresh draw, so it words itself in
+// the language the window will show.
 func (s *Service) LastResult() *query.Response {
 	res := s.snapshot()
 	if res == nil {
@@ -249,18 +504,10 @@ func (s *Service) LastResult() *query.Response {
 	return &next
 }
 
-// PanelLast is LastResult for the main window alone. The panel must not adopt a
-// 划词 answer just because it was the newest one; it shows 详情's promoted copy
-// or the last query that really ran there.
+// PanelLast is LastResult for the translation window, which is now the only
+// window that renders an answer.
 func (s *Service) PanelLast() *query.Response {
-	s.mu.Lock()
-	res := s.panelLast
-	s.mu.Unlock()
-	if res == nil {
-		return nil
-	}
-	next := localizedResponse(*res)
-	return &next
+	return s.LastResult()
 }
 
 // RetryOCR re-runs one recognition service on the stored crop, then rebuilds the
@@ -277,6 +524,15 @@ func (s *Service) RetryOCR(providerID string) error {
 	go func() {
 		s.emit(s.engine.RetryOCR(context.Background(), base, providerID, crop))
 	}()
+	return nil
+}
+
+// StopTranslate ends the streaming answer of one service in one window, the
+// way EasyDict's stop.circle does: what has already streamed stays on the card
+// and the service finishes there. A service that has landed has nothing to
+// stop, so an unknown id is not an error.
+func (s *Service) StopTranslate(context, providerID string) error {
+	s.engine.StopTranslate(context, providerID)
 	return nil
 }
 
@@ -300,7 +556,17 @@ func (s *Service) ReTranslate() error {
 	if base == nil || strings.TrimSpace(base.SourceText) == "" {
 		return errors.New("没有可翻译的文本")
 	}
-	return s.Ask(query.Request{Text: base.SourceText, Context: base.Context, Mode: base.Mode})
+	return s.Ask(query.Request{Text: base.SourceText, Context: base.Context, Mode: base.Mode,
+		SourceLang: base.SourceLang, Replaceable: base.Replaceable})
+}
+
+// ForgetLast drops the stored answer. 清空全部 hides it in the window, and
+// without this 重试 would bring it back from behind the curtain.
+func (s *Service) ForgetLast() {
+	s.mu.Lock()
+	s.last = nil
+	s.lastOCR = nil
+	s.mu.Unlock()
 }
 
 // SetTargetLang switches the output language and refreshes what is on screen.
@@ -326,7 +592,19 @@ func (s *Service) SetTargetLang(code string) error {
 // Speak returns audio for a passage. Playable folds a provider's bytes into a
 // data: URL, because the bridge carries only Clip.URL.
 func (s *Service) Speak(text, lang string, slow bool) tts.Result {
-	return localizedSpeech(s.engine.Speak(text, lang, slow).Playable())
+	return localizedSpeech(s.engine.Speak(text, speakLang(lang, s.cfg.Get().Pronunciation), slow).Playable())
+}
+
+// speakLang applies 英文发音 to the code a provider receives. Only English has
+// two voices; every other language keeps the code it detected.
+func speakLang(lang, pronunciation string) string {
+	if !strings.HasPrefix(lang, "en") {
+		return lang
+	}
+	if settings.ClampPronunciation(pronunciation) == settings.PronunciationUK {
+		return "en-GB"
+	}
+	return "en-US"
 }
 
 // History returns the newest matching entries.
@@ -363,6 +641,23 @@ func (s *Service) StarHistory(id string) (bool, error) {
 		return false, errors.New("历史不可用")
 	}
 	on, err := s.history.Star(id)
+	if err == nil {
+		s.command("history-changed")
+	}
+	return on, err
+}
+
+// FavoriteQuery is 快捷动作 → 添加到收藏. Unlike the 收藏 button on a history
+// row it does not need that row to exist, so it also works with 记录查询历史
+// off; the user asked for this one explicitly.
+func (s *Service) FavoriteQuery(text, translated, detected, targetLang string) (bool, error) {
+	if s.history == nil {
+		return false, errors.New("历史不可用")
+	}
+	on, err := s.history.Favorite(text, translated, detected, targetLang)
+	if err == nil {
+		s.command("history-changed")
+	}
 	return on, err
 }
 
@@ -370,7 +665,11 @@ func (s *Service) DeleteHistory(id string) error {
 	if s.history == nil {
 		return errors.New("历史不可用")
 	}
-	return s.history.Delete(id)
+	err := s.history.Delete(id)
+	if err == nil {
+		s.command("history-changed")
+	}
+	return err
 }
 
 // ClearHistory drops entries older than days; days <= 0 empties the log but
@@ -379,7 +678,24 @@ func (s *Service) ClearHistory(days int) (int, error) {
 	if s.history == nil {
 		return 0, errors.New("历史不可用")
 	}
-	return s.history.Clear(days)
+	n, err := s.history.Clear(days)
+	if err == nil {
+		s.command("history-changed")
+	}
+	return n, err
+}
+
+// ClearFavorites drops every starred entry, which is what the 收藏 tab's
+// 清空 button does after its confirmation.
+func (s *Service) ClearFavorites() (int, error) {
+	if s.history == nil {
+		return 0, errors.New("历史不可用")
+	}
+	n, err := s.history.ClearFavorites()
+	if err == nil {
+		s.command("history-changed")
+	}
+	return n, err
 }
 
 // ExportHistory renders the current filter for the clipboard.

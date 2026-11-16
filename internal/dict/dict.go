@@ -6,6 +6,7 @@ package dict
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +36,20 @@ type WebDefinition struct {
 	Conts []string `json:"conts"`
 }
 
+// Thesaurus is one synonym group: the part of speech plus the words the
+// dictionary groups under it and the gloss they share (有道 同义词).
+type Thesaurus struct {
+	Pos   string   `json:"pos,omitempty"`
+	Tran  string   `json:"tran,omitempty"`
+	Words []string `json:"words"`
+}
+
+// Phrase is a common collocation of the headword ("apple tree 苹果树").
+type Phrase struct {
+	Headword    string `json:"headword"`
+	Translation string `json:"translation,omitempty"`
+}
+
 // Example is a bilingual sentence pulled from a corpus.
 type Example struct {
 	Source      string `json:"source"`
@@ -49,8 +64,17 @@ type Entry struct {
 	Definitions []Definition    `json:"definitions,omitempty"`
 	Exchange    []string        `json:"exchange,omitempty"`
 	Web         []WebDefinition `json:"web,omitempty"`
-	Examples    []Example       `json:"examples,omitempty"`
-	Text        string          `json:"text,omitempty"`
+	// Related holds the site's compound entries ("Hello Kitty") for this word.
+	// They are lookup suggestions rather than senses of the headword, so they
+	// sit below the definitions instead of replacing 网络释义.
+	Related  []WebDefinition `json:"related,omitempty"`
+	Exams    []string        `json:"exams,omitempty"`
+	Examples []Example       `json:"examples,omitempty"`
+	// The word-card sections 有道 returns beside the senses.
+	Synonyms  []Thesaurus `json:"synonyms,omitempty"`
+	Phrases   []Phrase    `json:"phrases,omitempty"`
+	Etymology string      `json:"etymology,omitempty"`
+	Text      string      `json:"text,omitempty"`
 }
 
 // Result carries either an explanation or the provider's error text. Errors
@@ -62,10 +86,45 @@ type Result struct {
 	ElapsedMs int64   `json:"elapsedMs"`
 	Error     string  `json:"error,omitempty"`
 
+	// Warning marks a lookup the service answered but had no entry for.
+	// EasyDict's noResult: the card folds to a quiet row with ⊘ and no 重试,
+	// because asking the same dictionary again cannot find the word.
+	Warning bool `json:"warning,omitempty"`
+
+	// Unsupported marks a query the dictionary never answers, such as a whole
+	// sentence. EasyDict's unsupportedQueryType draws the same ⊘ but keeps the
+	// card open and 重试 available, since another text might be a word.
+	Unsupported bool `json:"unsupported,omitempty"`
+
 	// Site is the headword on the dictionary's own page, when the service
 	// declares one — the way out when a card looks truncated.
 	Site string `json:"site,omitempty"`
+
+	// OpenURL is the app scheme a local dictionary answers on, which is where
+	// the link button goes for the Apple dictionary (dict://词). Site stays the
+	// web page; a command-line app has no page to name.
+	OpenURL string `json:"openUrl,omitempty"`
 }
+
+// NotFoundError is a dictionary saying "not in me", as opposed to failing to
+// answer at all. The card draws the difference: a miss is a warning row, a
+// network fault is a red error that 重试 can fix.
+type NotFoundError struct{ msg string }
+
+func (e *NotFoundError) Error() string { return e.msg }
+
+// NotFound builds a miss with the service's own wording.
+func NotFound(msg string) error { return &NotFoundError{msg: msg} }
+
+// UnsupportedQueryError is a dictionary asked for something it never looks up,
+// such as a paragraph. It is not a miss and not a fault: the service is fine,
+// the query type is wrong.
+type UnsupportedQueryError struct{ msg string }
+
+func (e *UnsupportedQueryError) Error() string { return e.msg }
+
+// UnsupportedQuery builds that refusal with the dictionary's own wording.
+func UnsupportedQuery(msg string) error { return &UnsupportedQueryError{msg: msg} }
 
 // Plain renders an entry as text for copying and for the mini window, which
 // shows one line rather than a card.
@@ -78,6 +137,12 @@ func (e Entry) Plain() string {
 		sb.WriteString(head)
 	}
 	for _, w := range e.Web {
+		sb.WriteString("\n" + w.Value)
+		for _, c := range w.Conts {
+			sb.WriteString("\n  " + c)
+		}
+	}
+	for _, w := range e.Related {
 		sb.WriteString("\n" + w.Value)
 		for _, c := range w.Conts {
 			sb.WriteString("\n  " + c)
@@ -122,6 +187,12 @@ func RunQuery(ctx context.Context, name, label string, p Provider, text, src, ds
 	r := Result{Provider: name, Label: label, Entries: entries, ElapsedMs: time.Since(start).Milliseconds()}
 	if err != nil {
 		r.Error = netp.Reason(err)
+		var miss *NotFoundError
+		if errors.As(err, &miss) {
+			r.Warning = true
+		}
+		var unsupported *UnsupportedQueryError
+		r.Unsupported = errors.As(err, &unsupported)
 	}
 	return r
 }
@@ -150,6 +221,13 @@ func traditional(entries []Entry) []Entry {
 		}
 		for j := range e.Web {
 			w := &e.Web[j]
+			w.Value = zhconv.Traditional(w.Value)
+			for k := range w.Conts {
+				w.Conts[k] = zhconv.Traditional(w.Conts[k])
+			}
+		}
+		for j := range e.Related {
+			w := &e.Related[j]
 			w.Value = zhconv.Traditional(w.Value)
 			for k := range w.Conts {
 				w.Conts[k] = zhconv.Traditional(w.Conts[k])

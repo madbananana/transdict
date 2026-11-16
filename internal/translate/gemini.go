@@ -47,8 +47,10 @@ func init() {
 			{Key: settings.FieldAPIKey, Label: "API Key", Secret: true, Required: true},
 			{Key: settings.FieldBaseURL, Label: "接口地址", Placeholder: geminiDefaultBaseURL},
 			{Key: settings.FieldModel, Label: "模型", Placeholder: geminiDefaultModel},
+			{Key: settings.FieldSupportedModels, Label: "支持的模型", Placeholder: "gemini-2.0-flash, gemini-2.5-pro"},
 			{Key: settings.FieldPrompt, Label: "附加指令", Text: true},
 		},
+		Models:  []string{"gemini-2.0-flash", "gemini-2.5-pro"},
 		Default: settings.Provider{BaseURL: geminiDefaultBaseURL, Model: geminiDefaultModel},
 	}, func(p settings.Provider) (Provider, error) {
 		return newGemini(p.BaseURL, p.APIKey, p.Model, p.Prompt), nil

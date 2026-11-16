@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"transdict/internal/dict"
+	"transdict/internal/langs"
 	"transdict/internal/ocr"
 	"transdict/internal/settings"
 	"transdict/internal/translate"
@@ -25,15 +26,19 @@ func (e *Engine) RetryOCR(ctx context.Context, base *Response, providerID string
 	}
 	outcome := e.recognize(ctx, p, img, cfg.SourceLang)
 	res.OCR = mergeOutcome(res.OCR, outcome)
-	res.SourceText = PickText(res.OCR)
+	res.SourceText = OCRText(cfg, res.OCR)
 	res.ImageURL = DataURL(img)
 	if res.SourceText == "" {
-		return note(res, "未识别到文字")
+		return note(res, "OCR 结果为空。⚠️ 请手动选择识别语言再次尝试。")
 	}
 
 	req := Request{Context: res.Context, Mode: res.Mode, Text: res.SourceText,
 		SourceLang: cfg.SourceLang, TargetLang: cfg.TargetLang}
 	req.TargetLang = firstNonEmpty(res.TargetLang, req.TargetLang)
+	if req.TargetLang == langs.Auto {
+		req.TargetLang = autoTarget(cfg, res.SourceText)
+		res.TargetLang = req.TargetLang
+	}
 	res.Translate = e.translateStage(ctx, cfg, req, res, time.Now(), nil)
 	res.Dict = e.dictStage(ctx, cfg, req, res)
 	return res
@@ -53,6 +58,10 @@ func (e *Engine) Retry(ctx context.Context, base *Response, providerID string) *
 	}
 	req := Request{Context: res.Context, Mode: res.Mode, Text: res.SourceText,
 		SourceLang: cfg.SourceLang, TargetLang: firstNonEmpty(res.TargetLang, cfg.TargetLang)}
+	if req.TargetLang == langs.Auto {
+		req.TargetLang = autoTarget(cfg, res.SourceText)
+		res.TargetLang = req.TargetLang
+	}
 
 	switch p.Category {
 	case settings.CatDict:
@@ -60,7 +69,9 @@ func (e *Engine) Retry(ctx context.Context, base *Response, providerID string) *
 	case settings.CatOCR:
 		return note(res, "识别服务请使用重试识别")
 	default:
-		res.Translate = mergeTranslate(res.Translate, e.render(ctx, p, res.SourceText, req))
+		r := e.render(ctx, p, res.SourceText, req, cfg.FirstLang, nil)
+		finishAnswer(&r)
+		res.Translate = mergeTranslate(res.Translate, r)
 	}
 	return res
 }

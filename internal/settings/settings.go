@@ -62,10 +62,11 @@ func (s *Store) load() error {
 	// file has to carry both, or every launch would repeat the offer. A failed
 	// write is not fatal — it only means the same rows are offered again.
 	var stored struct {
-		Seed int `json:"seed"`
+		Seed         int `json:"seed"`
+		ShortcutSeed int `json:"shortcutSeed"`
 	}
 	_ = json.Unmarshal(data, &stored)
-	if stored.Seed != cfg.Seed {
+	if stored.Seed != cfg.Seed || stored.ShortcutSeed != cfg.ShortcutSeed {
 		return s.saveLocked()
 	}
 	return nil
@@ -116,6 +117,29 @@ func merge(cfg Config, present func(key string) bool) Config {
 	if cfg.SourceLang == "" {
 		cfg.SourceLang = d.SourceLang
 	}
+	if cfg.FirstLang == "" {
+		cfg.FirstLang = d.FirstLang
+	}
+	if cfg.SecondLang == "" {
+		cfg.SecondLang = d.SecondLang
+	}
+	// A mode this build does not know would leave 语种识别 doing nothing at all;
+	// falling back to the system recogniser is the same answer an older file
+	// expects.
+	switch cfg.DetectOptimize {
+	case DetectOptimizeGoogle, DetectOptimizeBaidu:
+	default:
+		cfg.DetectOptimize = d.DetectOptimize
+	}
+	// 第一语言 and 第二语言 are the two guesses the detector falls back to, so
+	// the same language twice says nothing. A hand-edited file gets the default
+	// pair rather than a detector that cannot break a tie.
+	if cfg.FirstLang == cfg.SecondLang {
+		cfg.SecondLang = d.SecondLang
+		if cfg.SecondLang == cfg.FirstLang {
+			cfg.SecondLang = d.FirstLang
+		}
+	}
 	if cfg.Theme == "" {
 		cfg.Theme = d.Theme
 	}
@@ -125,17 +149,192 @@ func merge(cfg Config, present func(key string) bool) Config {
 	if cfg.TTSAuto == "" {
 		cfg.TTSAuto = d.TTSAuto
 	}
-	if cfg.MiniFont <= 0 {
-		cfg.MiniFont = d.MiniFont
+	if cfg.DefaultTTS == "" {
+		cfg.DefaultTTS = d.DefaultTTS
 	}
-	// Zero in a file written before the field existed is "unset", not "close at
-	// once": the key's absence is the only evidence, since 0 is a valid int.
-	if !present("floatClose") {
-		cfg.FloatClose = d.FloatClose
+	switch cfg.ResultFont {
+	case "1", "2", "3", "4", "5":
+	// Files from before the scale had five steps: the old middle was 14.5px,
+	// which is the new first step, and the old large was closest to the second.
+	case "s", "m":
+		cfg.ResultFont = "1"
+	case "l":
+		cfg.ResultFont = "2"
+	default:
+		cfg.ResultFont = d.ResultFont
 	}
-	cfg.FloatClose = ClampFloatClose(cfg.FloatClose)
+	if !present("autoQueryPaste") {
+		cfg.AutoQueryPaste = d.AutoQueryPaste
+	}
+	if !present("autoQueryTyping") {
+		cfg.AutoQueryTyping = d.AutoQueryTyping
+	}
+	if !present("autoQueryOCR") {
+		cfg.AutoQueryOCR = d.AutoQueryOCR
+	}
+	if !present("clearInputOnQuery") {
+		cfg.ClearInputOnQuery = d.ClearInputOnQuery
+	}
+	if !present("selectTextOnOpen") {
+		cfg.SelectTextOnOpen = d.SelectTextOnOpen
+	}
+	if !present("keepLastOnNoSelection") {
+		cfg.KeepLastOnNoSelection = d.KeepLastOnNoSelection
+	}
+	if !present("autoCopySelect") {
+		cfg.AutoCopySelect = d.AutoCopySelect
+	}
+	if !present("autoCopyOCR") {
+		cfg.AutoCopyOCR = d.AutoCopyOCR
+	}
+	if !present("preferYoudaoWord") {
+		cfg.PreferYoudaoWord = d.PreferYoudaoWord
+	}
+	if !present("autoShowQueryIcon") {
+		cfg.AutoShowQueryIcon = d.AutoShowQueryIcon
+	}
+	if !present("queryIconClickOnly") {
+		cfg.QueryIconClickOnly = d.QueryIconClickOnly
+	}
+	if !present("queryIconMinLength") {
+		cfg.QueryIconMinLength = d.QueryIconMinLength
+	}
+	if !present("queryIconExcludeLang") {
+		cfg.QueryIconExcludeLang = d.QueryIconExcludeLang
+	}
+	cfg.QueryIconMinLength = ClampQueryIconMinLength(cfg.QueryIconMinLength)
+	if cfg.QueryIconExcludeLang == "" {
+		cfg.QueryIconExcludeLang = d.QueryIconExcludeLang
+	}
+	if !present("classicalMinLength") {
+		cfg.ClassicalMinLength = d.ClassicalMinLength
+	}
+	if !present("autoRemoveComments") {
+		cfg.AutoRemoveComments = d.AutoRemoveComments
+	}
+	if !present("replaceNewlineSpace") {
+		cfg.ReplaceNewlineSpace = d.ReplaceNewlineSpace
+	}
+	if !present("autoSelectAllText") {
+		cfg.AutoSelectAllText = d.AutoSelectAllText
+	}
+	if !present("replaceCompatible") {
+		cfg.ReplaceCompatible = d.ReplaceCompatible
+	}
+	if !present("forceCopy") {
+		cfg.ForceCopy = d.ForceCopy
+	}
+	if !present("forceCopyKind") {
+		cfg.ForceCopyKind = d.ForceCopyKind
+	}
+	cfg.ForceCopyKind = ClampForceCopyKind(cfg.ForceCopyKind)
+	if !present("preferAppleScriptAPI") {
+		cfg.PreferAppleScriptAPI = d.PreferAppleScriptAPI
+	}
+	if !present("windowConfig") {
+		cfg.WindowConfig = d.WindowConfig
+	} else {
+		cfg.WindowConfig = MergeWindowConfig(cfg.WindowConfig, d.WindowConfig)
+	}
+	if !present("showOCRMenu") {
+		cfg.ShowOCRMenu = d.ShowOCRMenu
+	}
+	// An older file has no icon style, and an unknown one must not leave the
+	// menu offering a checkmark on neither entry.
+	switch cfg.MenuBarIconStyle {
+	case MenuBarIconSquare:
+	default:
+		cfg.MenuBarIconStyle = d.MenuBarIconStyle
+	}
+	// The Anki destination is three strings and the field mapping. A file from
+	// before the feature has none of them, and an empty mapping would otherwise
+	// send addNote a note with no field name at all.
+	if !present("ankiEnabled") {
+		cfg.AnkiEnabled = d.AnkiEnabled
+	}
+	if !present("ankiEndpoint") || strings.TrimSpace(cfg.AnkiEndpoint) == "" {
+		cfg.AnkiEndpoint = d.AnkiEndpoint
+	}
+	if !present("ankiDeck") || strings.TrimSpace(cfg.AnkiDeck) == "" {
+		cfg.AnkiDeck = d.AnkiDeck
+	}
+	if !present("ankiModel") || strings.TrimSpace(cfg.AnkiModel) == "" {
+		cfg.AnkiModel = d.AnkiModel
+	}
+	if !present("ankiMappings") || len(cfg.AnkiMappings) == 0 {
+		cfg.AnkiMappings = append([]AnkiMapping(nil), d.AnkiMappings...)
+	}
+	if !present("maxHeightPct") {
+		cfg.MaxHeightPct = d.MaxHeightPct
+	}
+	cfg.MaxHeightPct = ClampMaxHeightPct(cfg.MaxHeightPct)
+	if !present("autoWordSegment") {
+		cfg.AutoWordSegment = d.AutoWordSegment
+	}
+	if !present("removeBooksExcerpt") {
+		cfg.RemoveBooksExcerpt = d.RemoveBooksExcerpt
+	}
+	if !present("blocklist") {
+		cfg.Blocklist = d.Blocklist
+	}
+	if !present("showGoogleLink") {
+		cfg.ShowGoogleLink = d.ShowGoogleLink
+	}
+	if !present("showAppleDictLink") {
+		cfg.ShowAppleDictLink = d.ShowAppleDictLink
+	}
+	if !present("showEudicLink") {
+		cfg.ShowEudicLink = d.ShowEudicLink
+	}
+	if !present("showQuickActionButton") {
+		cfg.ShowQuickActionButton = d.ShowQuickActionButton
+	}
+	if !present("hideMainWindow") {
+		cfg.HideMainWindow = d.HideMainWindow
+	}
+	if !present("pronunciation") {
+		cfg.Pronunciation = d.Pronunciation
+	}
+	cfg.Pronunciation = ClampPronunciation(cfg.Pronunciation)
+	if !present("markdownRender") {
+		cfg.MarkdownRender = d.MarkdownRender
+	}
+	if !present("httpPort") || strings.TrimSpace(cfg.HTTPPort) == "" {
+		cfg.HTTPPort = d.HTTPPort
+	} else if port, err := NormalizeHTTPPort(cfg.HTTPPort); err == nil {
+		cfg.HTTPPort = port
+	} else {
+		cfg.HTTPPort = d.HTTPPort
+	}
+
+	// The 迷你窗 and the floating query window are gone. Their keys are dropped
+	// instead of carried along, so an old file does not keep a binding for a
+	// window the app no longer draws.
+	delete(cfg.Shortcuts, "mini")
+	delete(cfg.Shortcuts, "clipboardFloat")
+	delete(cfg.Selections, "mini")
+	delete(cfg.Selections, "floating")
+
+	// The shortcuts moved to Easydict's defaults. A file that still carries the
+	// old combination is one nobody customized, so it follows; a key the user
+	// changed is left as it is. The stamp makes the move final.
+	if cfg.ShortcutSeed < defaultShortcutSeed {
+		legacy := map[string][2]string{
+			SlotInput:     {"alt+shift+d", "alt+a"},
+			SlotSelection: {"alt+shift+s", "alt+d"},
+			SlotCapture:   {"alt+shift+t", "alt+s"},
+			SlotSilentOCR: {"alt+shift+g", "alt+shift+s"},
+		}
+		for slot, pair := range legacy {
+			if list := cfg.Shortcuts[slot]; len(list) == 1 && list[0] == pair[0] {
+				cfg.Shortcuts[slot] = []string{pair[1]}
+			}
+		}
+		cfg.ShortcutSeed = defaultShortcutSeed
+	}
 
 	cfg.Shortcuts = mergeMap(cfg.Shortcuts, d.Shortcuts)
+	cfg.AppShortcuts = mergeMap(cfg.AppShortcuts, d.AppShortcuts)
 	cfg.Selections = mergeMap(cfg.Selections, d.Selections)
 
 	// A category with no key at all was written before the category existed, so
@@ -164,9 +363,6 @@ func merge(cfg Config, present func(key string) bool) Config {
 
 	// A bool whose default is true cannot be detected from its zero value, so
 	// an absent key is the only evidence that the field is new.
-	if !cfg.Floating && !present("floating") {
-		cfg.Floating = d.Floating
-	}
 	if !cfg.AutoUpdate && !present("autoUpdate") {
 		cfg.AutoUpdate = d.AutoUpdate
 	}

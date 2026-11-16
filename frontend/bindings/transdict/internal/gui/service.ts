@@ -7,13 +7,22 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as anki$0 from "../anki/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as capture$0 from "../capture/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as dict$0 from "../dict/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as history$0 from "../history/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as query$0 from "../query/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as settings$0 from "../settings/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as shortcut$0 from "../shortcut/models.js";
@@ -24,6 +33,51 @@ import * as tts$0 from "../tts/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as $models from "./models.js";
+
+/**
+ * AddToAnki is 添加到 Anki on a dictionary card: the card hands over every value
+ * a field template can name, and the mapping decides which go into the note.
+ */
+export function AddToAnki(note: anki$0.Note): $CancellablePromise<void> {
+    return $Call.ByID(2394440813, note);
+}
+
+/**
+ * AnkiFields is 从 Anki 读取字段: AnkiConnect knows how the note model spells
+ * its fields, so the settings page can offer them instead of trusting a typed
+ * name. It reads the saved endpoint and model for the same reason 测试连接 does.
+ */
+export function AnkiFields(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(3873150974);
+}
+
+/**
+ * AnkiPreview is 预览 on the Anki page: one word through a dictionary the user
+ * picked, so the templates are checked against a real answer. EasyDict's
+ * preview queries a service too; filling it from a canned sample hid a template
+ * that named a variable the dictionary never returns.
+ */
+export function AnkiPreview(providerID: string, word: string): $CancellablePromise<dict$0.Entry[] | null> {
+    return $Call.ByID(886015025, providerID, word);
+}
+
+/**
+ * AnkiTest checks the saved destination without writing a note, so 测试连接 can
+ * answer before the first card is made. It works while the switch is off: the
+ * address is exactly what someone setting this up needs to verify.
+ */
+export function AnkiTest(): $CancellablePromise<number> {
+    return $Call.ByID(514356883);
+}
+
+/**
+ * AppIcon answers a data: URL for the app's Finder icon, which is what
+ * EasyDict's DisabledAppTab draws beside each name. An unknown bundle or a
+ * non-macOS build answers empty and the page falls back to a letter tile.
+ */
+export function AppIcon(bundleID: string): $CancellablePromise<string> {
+    return $Call.ByID(448019050, bundleID);
+}
 
 /**
  * Ask is the single entry point every query mode funnels through: a hotkey, the
@@ -39,10 +93,20 @@ export function Cancel(): $CancellablePromise<void> {
 }
 
 /**
+ * CaptureReady is the overlay reporting that its frozen frame has decoded and
+ * the window is ready to be seen. Showing only now means the first frame on
+ * screen is the screenshot, not the webview's white backdrop. The marquee has
+ * to hear Esc and Return, and a background app only gets the keyboard if it
+ * asks; this is the user's own shortcut, so taking focus is the promise rather
+ * than an interruption.
+ */
+export function CaptureReady(frameIndex: number): $CancellablePromise<void> {
+    return $Call.ByID(2526157881, frameIndex);
+}
+
+/**
  * CatchSelection answers what the user just highlighted — 划词翻译. The answer
- * lands in the floating panel beside the pointer rather than in the main window,
- * because the reading position should not move; 通用 → 划词显示悬浮窗 turns that off
- * for people who would rather see every service at once.
+ * lands in the translation window, the only query window the app draws.
  */
 export function CatchSelection(): $CancellablePromise<void> {
     return $Call.ByID(735934547);
@@ -57,6 +121,14 @@ export function CheckUpdate(): $CancellablePromise<$models.UpdateReport> {
 }
 
 /**
+ * ClearFavorites drops every starred entry, which is what the 收藏 tab's
+ * 清空 button does after its confirmation.
+ */
+export function ClearFavorites(): $CancellablePromise<number> {
+    return $Call.ByID(2304721026);
+}
+
+/**
  * ClearHistory drops entries older than days; days <= 0 empties the log but
  * keeps favorites, which is what the button in the UI advertises.
  */
@@ -65,12 +137,12 @@ export function ClearHistory(days: number): $CancellablePromise<number> {
 }
 
 /**
- * ClipboardMini feeds the pasteboard to the mini window, which is the always-on
- * reading companion: copy a sentence in any app, hit the shortcut, see the
- * translation in a two-line panel pinned to the corner.
+ * ClipboardOCR recognizes the picture on the pasteboard — 剪贴板 OCR. It is the
+ * screenshot gesture without the screenshot: a picture already copied from a
+ * PDF, a chat or another screen goes to the same OCR 窗口 EasyDict opens.
  */
-export function ClipboardMini(): $CancellablePromise<void> {
-    return $Call.ByID(1794847305);
+export function ClipboardOCR(): $CancellablePromise<void> {
+    return $Call.ByID(740101542);
 }
 
 /**
@@ -81,20 +153,22 @@ export function ClipboardQuery(): $CancellablePromise<void> {
     return $Call.ByID(1620050098);
 }
 
-export function CloseFloat(): $CancellablePromise<void> {
-    return $Call.ByID(385630598);
-}
-
-export function CloseHistory(): $CancellablePromise<void> {
-    return $Call.ByID(153066228);
-}
-
 /**
- * CloseMini hides the mini window. Hiding rather than closing keeps its webview
- * warm, so the next 迷你窗 shortcut is instant.
+ * ClipboardText backs the query box's 粘贴 item: the webview cannot read the
+ * pasteboard itself, so the menu takes the text from Go and inserts it at the
+ * selection. An empty pasteboard and a failed read look the same to the caller,
+ * which then does nothing.
  */
-export function CloseMini(): $CancellablePromise<void> {
-    return $Call.ByID(202296883);
+export function ClipboardText(): $CancellablePromise<string> {
+    return $Call.ByID(547680653);
+}
+
+export function CloseLogs(): $CancellablePromise<void> {
+    return $Call.ByID(3385741007);
+}
+
+export function CloseOCR(): $CancellablePromise<void> {
+    return $Call.ByID(1487140444);
 }
 
 /**
@@ -124,6 +198,15 @@ export function DeleteHistory(id: string): $CancellablePromise<void> {
 }
 
 /**
+ * DetectText names the language of the text a query view is holding, before a
+ * query is made. EasyDict's components run the same recognition one second
+ * after the text settles so 识别为 is available while the user is still typing.
+ */
+export function DetectText(text: string): $CancellablePromise<string> {
+    return $Call.ByID(476478952, text);
+}
+
+/**
  * ExportConfigFile writes the settings — service keys included, since a config
  * without them is not worth moving between machines — and returns the path.
  * An empty path means the panel was closed, which is a choice, not a failure.
@@ -137,6 +220,33 @@ export function ExportConfigFile(): $CancellablePromise<string> {
  */
 export function ExportHistory(needle: string, favoritesOnly: boolean, service: string, format: string): $CancellablePromise<string> {
     return $Call.ByID(1617880094, needle, favoritesOnly, service, format);
+}
+
+/**
+ * FavoriteQuery is 快捷动作 → 添加到收藏. Unlike the 收藏 button on a history
+ * row it does not need that row to exist, so it also works with 记录查询历史
+ * off; the user asked for this one explicitly.
+ */
+export function FavoriteQuery(text: string, translated: string, detected: string, targetLang: string): $CancellablePromise<boolean> {
+    return $Call.ByID(1586490200, text, translated, detected, targetLang);
+}
+
+/**
+ * FitMain sets the translation window's height to what its content reports.
+ * EasyDict sizes every query window to its answer and leaves only the width to
+ * the user; the main window grew to 600 regardless of whether the answer was
+ * one line or a page.
+ */
+export function FitMain(height: number): $CancellablePromise<void> {
+    return $Call.ByID(4060887726, height);
+}
+
+/**
+ * ForgetLast drops the stored answer. 清空全部 hides it in the window, and
+ * without this 重试 would bring it back from behind the curtain.
+ */
+export function ForgetLast(): $CancellablePromise<void> {
+    return $Call.ByID(3706504317);
 }
 
 /**
@@ -164,6 +274,14 @@ export function HistoryServices(): $CancellablePromise<history$0.ServiceCount[] 
 }
 
 /**
+ * IconQuery is the button itself: the text was captured by the watcher, so the
+ * click only has to ask. It is a bound method so the icon window can call it.
+ */
+export function IconQuery(): $CancellablePromise<void> {
+    return $Call.ByID(3803945959);
+}
+
+/**
  * ImportConfigFile reads a config the user picked and applies it whole. The
  * store refuses a file that shares no field with a Config rather than resetting
  * the app with whatever JSON was selected.
@@ -173,12 +291,39 @@ export function ImportConfigFile(): $CancellablePromise<string> {
 }
 
 /**
- * LastResult re-sends the previous response so a window opened after the query —
- * the floating and mini panels are lazy — can render what already happened. It is
- * a fresh draw, so it words itself in the language the window will show.
+ * LastCaptureArea hands the overlay the rectangle of 上一次截图区域, which the D
+ * key applies without asking for the same drag again. It answers only for the
+ * display the rectangle was taken on: pixel coordinates mean a different crop
+ * on a display with another scale.
+ */
+export function LastCaptureArea(frameIndex: number): $CancellablePromise<$models.CaptureArea | null> {
+    return $Call.ByID(3231156999, frameIndex);
+}
+
+/**
+ * LastResult re-sends the previous response so a window opened after the query
+ * can render what already happened. It is a fresh draw, so it words itself in
+ * the language the window will show.
  */
 export function LastResult(): $CancellablePromise<query$0.Response | null> {
     return $Call.ByID(2922386873);
+}
+
+/**
+ * LogFile is the path the debug window's footer names, so a copied line can be
+ * found again in Finder without guessing where it lives.
+ */
+export function LogFile(): $CancellablePromise<string> {
+    return $Call.ByID(2520423604);
+}
+
+/**
+ * LogTail is the debug window's content: the last lines of the file Setup
+ * writes. The window polls it, so the page needs no file access of its own and
+ * a hidden window costs one read per second at most.
+ */
+export function LogTail(lines: number): $CancellablePromise<string> {
+    return $Call.ByID(2796163652, lines);
 }
 
 /**
@@ -193,12 +338,50 @@ export function MaskAndRecognize(rects: capture$0.MaskRect[] | null): $Cancellab
 }
 
 /**
- * MiniQuery answers in the always-on-top mini window.
+ * OCRPreview hands the window the newest recognition. An empty payload is a
+ * valid answer: 显示 OCR 窗口 can be pressed before anything has been read, and
+ * the page then shows its empty state the way EasyDict opens a blank preview.
  */
-export function MiniQuery(text: string): $CancellablePromise<void> {
-    return $Call.ByID(1374162117, text);
+export function OCRPreview(): $CancellablePromise<$models.OCRPreview> {
+    return $Call.ByID(710180140);
 }
 
+/**
+ * OCRWindowPinned reports the preview's own pin. EasyDict's OCRWindow keeps the
+ * flag on the window rather than in preferences: a new recognition reuses the
+ * window, and the level it was left at is the level it comes back with.
+ */
+export function OCRWindowPinned(): $CancellablePromise<boolean> {
+    return $Call.ByID(1469737270);
+}
+
+/**
+ * OpenAbout raises preferences on 关于, which is where this app keeps the version,
+ * privacy note and credits Easydict shows in its About panel.
+ */
+export function OpenAbout(): $CancellablePromise<void> {
+    return $Call.ByID(1353028557);
+}
+
+/**
+ * OpenContributorsPage opens the contributor graph, mirroring EasyDict's 关于
+ * row of the same name.
+ */
+export function OpenContributorsPage(): $CancellablePromise<void> {
+    return $Call.ByID(3729306285);
+}
+
+/**
+ * OpenFeedbackPage opens the issue tracker, mirroring EasyDict's 反馈 entry.
+ */
+export function OpenFeedbackPage(): $CancellablePromise<void> {
+    return $Call.ByID(2540545092);
+}
+
+/**
+ * OpenHistory raises preferences on 收藏, where 历史 and 收藏 share one list. A
+ * history of its own window would be a second copy of that page.
+ */
 export function OpenHistory(): $CancellablePromise<void> {
     return $Call.ByID(1757439456);
 }
@@ -208,11 +391,26 @@ export function OpenInput(): $CancellablePromise<void> {
 }
 
 /**
- * OpenLink answers a transdict:// link in the floating panel, which is the
- * window someone calling the app from another program expects to see.
+ * OpenLastOCR is 显示 OCR 窗口: the preview is reopened with whatever was
+ * recognized last, or empty before the first recognition. EasyDict opens the
+ * window unconditionally, so this does too.
+ */
+export function OpenLastOCR(): $CancellablePromise<void> {
+    return $Call.ByID(3376169008);
+}
+
+/**
+ * OpenLink answers a transdict:// link in the translation window.
  */
 export function OpenLink(raw: string): $CancellablePromise<void> {
     return $Call.ByID(1525729800, raw);
+}
+
+/**
+ * OpenLogs is 显示调试日志窗口: the same tail 高级 → 日志 points at.
+ */
+export function OpenLogs(): $CancellablePromise<void> {
+    return $Call.ByID(2004295419);
 }
 
 /**
@@ -225,15 +423,6 @@ export function OpenMain(): $CancellablePromise<void> {
 }
 
 /**
- * OpenMainDetail shows the answer the floating panel is displaying in the main
- * window. 详情 means "this answer, larger"; presenting the panel on whatever it
- * answered last would show a different query.
- */
-export function OpenMainDetail(): $CancellablePromise<void> {
-    return $Call.ByID(2465946372);
-}
-
-/**
  * OpenPermission opens the system pane that holds one of the checkboxes. The
  * app cannot flip it: macOS only honours a change after a relaunch, which is
  * why the page says so beside the button.
@@ -243,18 +432,35 @@ export function OpenPermission(name: string): $CancellablePromise<void> {
 }
 
 /**
- * OpenSettings and OpenHistory each raise their own window. Preferences are not
- * a tab of the translation window: it is narrow by design, and a sidebar plus
- * forms would squeeze the paragraph the user is reading.
+ * OpenProjectPage opens the repository in the default browser. It is not a
+ * query: the 关于 page needs the browser, not a translation result.
+ */
+export function OpenProjectPage(): $CancellablePromise<void> {
+    return $Call.ByID(4215993918);
+}
+
+/**
+ * OpenQuickLink opens a 快捷链接 and reports whether the system found anything
+ * to open it with. Wails' Browser.OpenURL starts `open` and never waits for it,
+ * so an uninstalled Eudic comes back as success and the 欧 chip looks dead;
+ * waiting for the command turns that into an error the window can show.
+ */
+export function OpenQuickLink(raw: string): $CancellablePromise<void> {
+    return $Call.ByID(4125933955, raw);
+}
+
+/**
+ * Preferences are not a tab of the translation window: it is narrow by design,
+ * and a sidebar plus forms would squeeze the paragraph the user is reading.
+ * OpenSettings raises it on whichever tab it last showed.
  */
 export function OpenSettings(): $CancellablePromise<void> {
     return $Call.ByID(3834230405);
 }
 
 /**
- * PanelLast is LastResult for the main window alone. The panel must not adopt a
- * 划词 answer just because it was the newest one; it shows 详情's promoted copy
- * or the last query that really ran there.
+ * PanelLast is LastResult for the translation window, which is now the only
+ * window that renders an answer.
  */
 export function PanelLast(): $CancellablePromise<query$0.Response | null> {
     return $Call.ByID(1074994066);
@@ -269,6 +475,23 @@ export function Permissions(): $CancellablePromise<$models.PermissionState> {
 }
 
 /**
+ * PickBlockedApp asks for an app and answers the row 禁止名单 stores. The panel
+ * is the Finder's own 打开 sheet, so a bundle is picked visually instead of
+ * typed as a bundle identifier.
+ */
+export function PickBlockedApp(): $CancellablePromise<settings$0.BlockedApp> {
+    return $Call.ByID(150281290);
+}
+
+/**
+ * PickDictFiles asks for .mdx files. Multi-select because dictionaries are
+ * normally imported a shelf at a time.
+ */
+export function PickDictFiles(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(3358205528);
+}
+
+/**
  * PickDirectory answers a field declared Folder: true. Typing the path to a
  * dictionary folder is the one thing nobody gets right first time.
  */
@@ -277,11 +500,30 @@ export function PickDirectory(): $CancellablePromise<string> {
 }
 
 /**
+ * PolishReplaceSelection is 润色并替换: the selection is rewritten by an AI
+ * service under the 润色 instruction, and the answer takes its place. Reading
+ * and widening the selection works exactly as 翻译并替换.
+ */
+export function PolishReplaceSelection(): $CancellablePromise<void> {
+    return $Call.ByID(223628223);
+}
+
+/**
  * Prompt runs an ad-hoc instruction (润色 / 总结 / 语气改写) over the AI-capable
  * services of the current selection while keeping the source text on screen.
  */
 export function Prompt(text: string, instruction: string): $CancellablePromise<void> {
     return $Call.ByID(3455323654, text, instruction);
+}
+
+/**
+ * QueryInApp is EasyDict's query_in_app: the context menu on a query box runs
+ * the word it was opened on, so a word read in an answer can be looked up
+ * without retyping it. Every query lands in the same window, so there is no
+ * window to choose between.
+ */
+export function QueryInApp(text: string, $from: string): $CancellablePromise<void> {
+    return $Call.ByID(305763662, text, $from);
 }
 
 /**
@@ -306,6 +548,16 @@ export function ReTranslate(): $CancellablePromise<void> {
  */
 export function ReplaceSelection(): $CancellablePromise<void> {
     return $Call.ByID(3037804614);
+}
+
+/**
+ * ReplaceWithText is the result card's 替换 button (EasyDict's EZReplaceTextButton):
+ * the answer the user picked goes back over the selection the query was made
+ * from. Only a query about a live, editable selection carries Replaceable, which
+ * is what puts the button on the cards in the first place.
+ */
+export function ReplaceWithText(text: string): $CancellablePromise<void> {
+    return $Call.ByID(4134432247, text);
 }
 
 /**
@@ -339,6 +591,39 @@ export function RetryOCR(providerID: string): $CancellablePromise<void> {
  */
 export function SaveHistoryFile(needle: string, favoritesOnly: boolean, service: string, format: string): $CancellablePromise<string> {
     return $Call.ByID(820113321, needle, favoritesOnly, service, format);
+}
+
+/**
+ * SaveLogFile asks where the log should go and writes it there, returning the
+ * path chosen.
+ */
+export function SaveLogFile(): $CancellablePromise<string> {
+    return $Call.ByID(2687784655);
+}
+
+/**
+ * SetOCRWindowPinned flips the OCR 窗口's pin and reports the new state. Pinned
+ * has both halves EasyDict gives it: a floating level and no hiding on blur.
+ */
+export function SetOCRWindowPinned(pinned: boolean): $CancellablePromise<boolean> {
+    return $Call.ByID(1751475238, pinned);
+}
+
+/**
+ * SetResultFont stores the reading size the panel's Aa button cycles. The value
+ * is a token rather than pixels so the stylesheet keeps its own numbers.
+ */
+export function SetResultFont(size: string): $CancellablePromise<void> {
+    return $Call.ByID(1221582148, size);
+}
+
+/**
+ * SetSettingsPage names the window after the tab the page restored, the way a
+ * SwiftUI settings scene does. The size stays put: switching tabs must not make
+ * the window jump between heights.
+ */
+export function SetSettingsPage(page: string): $CancellablePromise<void> {
+    return $Call.ByID(3567000670, page);
 }
 
 /**
@@ -386,6 +671,15 @@ export function Start(): $CancellablePromise<void> {
 }
 
 /**
+ * StartOCR is 截图 OCR: the same marquee as 截图翻译, but the result is the OCR
+ * 窗口 — the picture with the lines found in it and the merged text — instead of
+ * a translation. EasyDict's OCR menu entries all end in that preview.
+ */
+export function StartOCR(): $CancellablePromise<void> {
+    return $Call.ByID(4098314548);
+}
+
+/**
  * StartSilent begins the same marquee flow but ends in the pasteboard: the crop
  * is recognized with the 静音 OCR services and copied, and no window opens.
  * It is the fastest way to lift text out of anything — a PDF, a video, a canvas.
@@ -395,11 +689,48 @@ export function StartSilent(): $CancellablePromise<void> {
 }
 
 /**
+ * StopTranslate ends the streaming answer of one service in one window, the
+ * way EasyDict's stop.circle does: what has already streamed stays on the card
+ * and the service finishes there. A service that has landed has nothing to
+ * stop, so an unknown id is not an error.
+ */
+export function StopTranslate(context: string, providerID: string): $CancellablePromise<void> {
+    return $Call.ByID(2076401358, context, providerID);
+}
+
+/**
+ * TakeSettingsPage hands over the page an opener asked for, once: a settings
+ * window that mounts later must not reopen on that tab every time it is raised.
+ */
+export function TakeSettingsPage(): $CancellablePromise<string> {
+    return $Call.ByID(3076509973);
+}
+
+/**
+ * Toast reports a short outcome at the pointer. A card action such as 添加到
+ * Anki answers where the click happened, as EasyDict does, instead of growing a
+ * status line inside the window.
+ */
+export function Toast(text: string): $CancellablePromise<void> {
+    return $Call.ByID(1787649167, text);
+}
+
+/**
  * TogglePin flips 置顶 and reports the new state. The store is the one place
  * both the window button and the tray checkbox read, so the two never disagree.
  */
 export function TogglePin(): $CancellablePromise<boolean> {
     return $Call.ByID(2406821083);
+}
+
+/**
+ * TransformText applies one of the titlebar 快捷动作 to the query text. The
+ * rewriting lives here rather than in the window so the menu, the query-time
+ * options and the dictionary fallback all share one definition of 分词,
+ * 去除注释 and 换行转空格.
+ */
+export function TransformText(text: string, action: string): $CancellablePromise<string> {
+    return $Call.ByID(3605742843, text, action);
 }
 
 /**

@@ -6,10 +6,14 @@ export {
 } from "./models.js";
 
 export type {
+    AnkiMapping,
+    BlockedApp,
     Config,
     Field,
+    FieldOption,
     Label,
     Provider,
     ProviderKind,
-    ServiceType
+    ServiceType,
+    WindowOptions
 } from "./models.js";

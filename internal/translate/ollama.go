@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,11 +36,14 @@ func init() {
 		Kind: "ollama", Name: "Ollama（本地模型）",
 		Note: "免密钥本地推理；先执行 ollama pull 拉取所选模型",
 		Free: true, Multi: true, Markdown: true, Prompt: true,
+		FetchModels: true, FetchLocalModels: true,
 		Fields: []settings.Field{
 			{Key: settings.FieldBaseURL, Label: "服务地址", Placeholder: ollamaDefaultBaseURL},
 			{Key: settings.FieldModel, Label: "模型", Placeholder: ollamaDefaultModel},
+			{Key: settings.FieldSupportedModels, Label: "支持的模型", Placeholder: ollamaDefaultModel},
 			{Key: settings.FieldPrompt, Label: "附加指令", Text: true},
 		},
+		Models:  []string{ollamaDefaultModel},
 		Default: settings.Provider{BaseURL: ollamaDefaultBaseURL, Model: ollamaDefaultModel},
 	}, func(p settings.Provider) (Provider, error) {
 		return newOllama(p.BaseURL, p.Model, p.Prompt), nil
@@ -158,4 +162,45 @@ func ollamaErrText(msg string, raw []byte) string {
 		return msg
 	}
 	return truncate(string(raw))
+}
+
+// ListModels reads the models the local daemon has pulled, which is EasyDict's
+// 获取本地模型: the catalog lives on this machine, not at a vendor.
+func (o *ollama) ListModels(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, o.BaseURL+"/api/tags", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := o.httpc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("获取模型列表 HTTP %d: %s", resp.StatusCode, truncate(string(raw)))
+	}
+	var body struct {
+		Models []struct {
+			Name  string `json:"name"`
+			Model string `json:"model"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, errors.New("模型列表格式不符合预期")
+	}
+	models := make([]string, 0, len(body.Models))
+	for _, m := range body.Models {
+		name := strings.TrimSpace(m.Name)
+		if name == "" {
+			name = strings.TrimSpace(m.Model)
+		}
+		if name != "" {
+			models = append(models, name)
+		}
+	}
+	return models, nil
 }

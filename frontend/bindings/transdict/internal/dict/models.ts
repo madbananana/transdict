@@ -20,7 +20,22 @@ export interface Entry {
     "definitions"?: Definition[] | null;
     "exchange"?: string[] | null;
     "web"?: WebDefinition[] | null;
+
+    /**
+     * Related holds the site's compound entries ("Hello Kitty") for this word.
+     * They are lookup suggestions rather than senses of the headword, so they
+     * sit below the definitions instead of replacing 网络释义.
+     */
+    "related"?: WebDefinition[] | null;
+    "exams"?: string[] | null;
     "examples"?: Example[] | null;
+
+    /**
+     * The word-card sections 有道 returns beside the senses.
+     */
+    "synonyms"?: Thesaurus[] | null;
+    "phrases"?: Phrase[] | null;
+    "etymology"?: string;
     "text"?: string;
 }
 
@@ -42,6 +57,14 @@ export interface Phonetic {
 }
 
 /**
+ * Phrase is a common collocation of the headword ("apple tree 苹果树").
+ */
+export interface Phrase {
+    "headword": string;
+    "translation"?: string;
+}
+
+/**
  * Result carries either an explanation or the provider's error text. Errors
  * travel as data because the UI shows every provider side by side.
  */
@@ -53,10 +76,41 @@ export interface Result {
     "error"?: string;
 
     /**
+     * Warning marks a lookup the service answered but had no entry for.
+     * EasyDict's noResult: the card folds to a quiet row with ⊘ and no 重试,
+     * because asking the same dictionary again cannot find the word.
+     */
+    "warning"?: boolean;
+
+    /**
+     * Unsupported marks a query the dictionary never answers, such as a whole
+     * sentence. EasyDict's unsupportedQueryType draws the same ⊘ but keeps the
+     * card open and 重试 available, since another text might be a word.
+     */
+    "unsupported"?: boolean;
+
+    /**
      * Site is the headword on the dictionary's own page, when the service
      * declares one — the way out when a card looks truncated.
      */
     "site"?: string;
+
+    /**
+     * OpenURL is the app scheme a local dictionary answers on, which is where
+     * the link button goes for the Apple dictionary (dict://词). Site stays the
+     * web page; a command-line app has no page to name.
+     */
+    "openUrl"?: string;
+}
+
+/**
+ * Thesaurus is one synonym group: the part of speech plus the words the
+ * dictionary groups under it and the gloss they share (有道 同义词).
+ */
+export interface Thesaurus {
+    "pos"?: string;
+    "tran"?: string;
+    "words": string[] | null;
 }
 
 /**

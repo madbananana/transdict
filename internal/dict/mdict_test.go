@@ -472,7 +472,7 @@ func TestMDXProviderExplain(t *testing.T) {
 
 	p, err := New(settings.Provider{ID: "dict-mdict", Category: settings.CatDict,
 		Kind: "mdict", Label: "MDict", Enabled: true,
-		Extra: map[string]string{mdictPathField: dir}})
+		Extra: map[string]string{PathField: dir}})
 	if err != nil {
 		t.Fatalf("New(mdict) 失败: %v", err)
 	}
@@ -519,7 +519,7 @@ func TestMDXProviderNeedsFolder(t *testing.T) {
 	}
 	missing := filepath.Join(t.TempDir(), "nope")
 	if _, err := New(settings.Provider{Kind: "mdict",
-		Extra: map[string]string{mdictPathField: missing}}); err == nil ||
+		Extra: map[string]string{PathField: missing}}); err == nil ||
 		!strings.Contains(errText(err), "文件夹不存在") {
 		t.Fatalf("错误 = %v, 期望提示文件夹不存在", err)
 	}
@@ -652,5 +652,66 @@ func TestStripHTMLTagsIsIdempotent(t *testing.T) {
 	once := stripHTMLTags(html)
 	if twice := stripHTMLTags(once); twice != once {
 		t.Errorf("二次清洗不稳定: %q vs %q", once, twice)
+	}
+}
+
+func TestParseFilesTrimsAndDeduplicates(t *testing.T) {
+	got := ParseFiles(" /d/a.mdx \n\n/d/a.mdx\n/d/b.mdx\n")
+	want := []string{"/d/a.mdx", "/d/b.mdx"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("ParseFiles = %v, want %v", got, want)
+	}
+	if joined := JoinFiles([]string{" /d/a.mdx ", "/d/a.mdx", "/d/b.mdx"}); joined != "/d/a.mdx\n/d/b.mdx" {
+		t.Errorf("JoinFiles = %q", joined)
+	}
+}
+
+func TestImportedFilesTakePrecedenceOverFolder(t *testing.T) {
+	dir := t.TempDir()
+	folderFile := filepath.Join(dir, "folder.mdx")
+	picked := filepath.Join(dir, "picked.mdx")
+	for _, path := range []string{folderFile, picked} {
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatalf("写入 %s: %v", path, err)
+		}
+	}
+
+	// Both a folder and a list: only the imported file answers.
+	m := &mdict{dir: dir, files: []string{picked}}
+	files, err := m.dictionaries()
+	if err != nil {
+		t.Fatalf("dictionaries: %v", err)
+	}
+	if len(files) != 1 || files[0] != picked {
+		t.Errorf("files = %v, 期望只含导入的 %s", files, picked)
+	}
+
+	// No list: the folder is scanned, as before.
+	scan := &mdict{dir: dir}
+	files, err = scan.dictionaries()
+	if err != nil || len(files) != 2 {
+		t.Fatalf("文件夹扫描 = %v (err %v), 期望 2 个", files, err)
+	}
+}
+
+func TestNewMDictReadsImportedFiles(t *testing.T) {
+	picked := filepath.Join(t.TempDir(), "picked.mdx")
+	if err := os.WriteFile(picked, []byte("x"), 0o600); err != nil {
+		t.Fatalf("写入词典: %v", err)
+	}
+	prov, err := New(settings.Provider{Kind: "mdict",
+		Extra: map[string]string{FilesField: picked}})
+	if err != nil {
+		t.Fatalf("New(mdict) 失败: %v", err)
+	}
+	if got := prov.(*mdict).files; len(got) != 1 || got[0] != picked {
+		t.Errorf("files = %v, want [%s]", got, picked)
+	}
+
+	// A list whose files are all gone is a configuration error, not an empty
+	// dictionary that silently answers "not found".
+	if _, err := New(settings.Provider{Kind: "mdict",
+		Extra: map[string]string{FilesField: filepath.Join(t.TempDir(), "gone.mdx")}}); err == nil {
+		t.Fatal("导入文件都不存在时构造应失败")
 	}
 }

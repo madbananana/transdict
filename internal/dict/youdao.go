@@ -56,7 +56,7 @@ func (y *youdaoDict) Explain(ctx context.Context, text, sourceLang, targetLang s
 		return nil, fmt.Errorf("有道词典：查询内容为空")
 	}
 	if len([]rune(word)) > youdaoMaxQueryRunes {
-		return nil, fmt.Errorf("有道词典：查询过长（最多 %d 个字符），词典只收录单词与短语", youdaoMaxQueryRunes)
+		return nil, UnsupportedQuery(fmt.Sprintf("有道词典：查询过长（最多 %d 个字符），词典只收录单词与短语", youdaoMaxQueryRunes))
 	}
 
 	q := url.Values{}
@@ -103,6 +103,10 @@ type youdaoPayload struct {
 	WebTrans struct {
 		Items json.RawMessage `json:"web-translation"`
 	} `json:"web_trans"`
+	// The word-card sections that sit below the senses: 同义词, 短语 and 词源.
+	Syno json.RawMessage `json:"syno"`
+	Phrs json.RawMessage `json:"phrs"`
+	Etym json.RawMessage `json:"etym"`
 }
 
 type youdaoWord struct {
@@ -145,6 +149,7 @@ type youdaoSent struct {
 // one entry per word object; the other sections decorate them.
 func (p *youdaoPayload) entries(word string) ([]Entry, error) {
 	words := youdaoObjects(p.Ec, "word")
+	exams := youdaoExams(p.Ec)
 	var out []Entry
 
 	for _, raw := range words {
@@ -152,18 +157,23 @@ func (p *youdaoPayload) entries(word string) ([]Entry, error) {
 		if err := json.Unmarshal(raw, &w); err != nil {
 			continue
 		}
-		e := Entry{Word: youdaoHeadword(w.ReturnPhrase, word)}
+		e := Entry{Word: youdaoHeadword(w.ReturnPhrase, word), Exams: exams}
 		e.Phonetics = youdaoPhonetics(w, word)
 		e.Definitions = youdaoDefinitions(w.Trs)
 		e.Exchange = youdaoExchange(w.Wfs)
 		e.Examples = youdaoExamples(p.Sents.Pairs)
-		e.Web = youdaoWeb(p.WebTrans.Items, word)
+		web, related := youdaoWeb(p.WebTrans.Items, word)
+		e.Web, e.Related = web, related
+		e.Synonyms = youdaoThesaurus(p.Syno)
+		e.Phrases = youdaoPhrases(p.Phrs)
+		e.Etymology = youdaoEtymology(p.Etym)
 		// A word's web sense often restates a brand it already lists as a real
 		// sense ("Apple：苹果公司" beside 苹果公司（Apple Inc.）); repeating it as
 		// 网义 made the card look like a company page. Keep only web senses that
 		// add something the definitions do not already say.
 		e.Web = onlyNewWeb(e.Web, e.Definitions)
-		if len(e.Definitions) == 0 && len(e.Web) == 0 && len(e.Phonetics) == 0 {
+		if len(e.Definitions) == 0 && len(e.Web) == 0 && len(e.Related) == 0 &&
+			len(e.Phonetics) == 0 && len(e.Phrases) == 0 && len(e.Synonyms) == 0 {
 			continue
 		}
 		out = append(out, e)
@@ -174,14 +184,19 @@ func (p *youdaoPayload) entries(word string) ([]Entry, error) {
 		// translations, so fall back to those before calling it a miss.
 		var e Entry
 		e.Word = word
-		e.Web = youdaoWeb(p.WebTrans.Items, word)
+		e.Web, e.Related = youdaoWeb(p.WebTrans.Items, word)
 		e.Examples = youdaoExamples(p.Sents.Pairs)
 		e.Definitions = youdaoChineseDefinitions(p)
+		e.Synonyms = youdaoThesaurus(p.Syno)
+		e.Phrases = youdaoPhrases(p.Phrs)
+		e.Etymology = youdaoEtymology(p.Etym)
 		if phones := youdaoSimplePhonetics(p.Simple, word); len(phones) > 0 {
 			e.Phonetics = phones
 		}
-		if len(e.Web) == 0 && len(e.Examples) == 0 && len(e.Phonetics) == 0 && len(e.Definitions) == 0 {
-			return nil, fmt.Errorf("有道词典未收录该词：%s", clip(word, 40))
+		if len(e.Web) == 0 && len(e.Related) == 0 && len(e.Examples) == 0 &&
+			len(e.Phonetics) == 0 && len(e.Definitions) == 0 &&
+			len(e.Phrases) == 0 && len(e.Synonyms) == 0 {
+			return nil, NotFound(fmt.Sprintf("有道词典未收录该词：%s", clip(word, 40)))
 		}
 		out = append(out, e)
 	}
@@ -543,24 +558,124 @@ func youdaoExchange(raw json.RawMessage) []string {
 	return out
 }
 
-func youdaoWeb(raw json.RawMessage, word string) []WebDefinition {
+// youdaoThesaurus reads the 同义词 groups. The API returns one row per part of
+// speech with the words and a shared gloss; rows without words are dropped.
+func youdaoThesaurus(raw json.RawMessage) []Thesaurus {
+	var p struct {
+		Synos []struct {
+			Pos  string   `json:"pos"`
+			Tran string   `json:"tran"`
+			WS   []string `json:"ws"`
+		} `json:"synos"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil
+	}
+	var out []Thesaurus
+	for _, s := range p.Synos {
+		words := make([]string, 0, len(s.WS))
+		for _, w := range s.WS {
+			if w = strings.TrimSpace(w); w != "" {
+				words = append(words, w)
+			}
+		}
+		if len(words) == 0 {
+			continue
+		}
+		out = append(out, Thesaurus{Pos: strings.TrimSpace(s.Pos), Tran: strings.TrimSpace(s.Tran), Words: words})
+	}
+	if len(out) > 6 {
+		out = out[:6]
+	}
+	return out
+}
+
+// youdaoPhrases reads the 短语 list — the collocations the dictionary pairs
+// with the headword.
+func youdaoPhrases(raw json.RawMessage) []Phrase {
+	var p struct {
+		Phrs []struct {
+			Headword    string `json:"headword"`
+			Translation string `json:"translation"`
+		} `json:"phrs"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil
+	}
+	var out []Phrase
+	for _, ph := range p.Phrs {
+		head := strings.TrimSpace(ph.Headword)
+		if head == "" {
+			continue
+		}
+		out = append(out, Phrase{Headword: head, Translation: strings.TrimSpace(ph.Translation)})
+	}
+	if len(out) > 10 {
+		out = out[:10]
+	}
+	return out
+}
+
+// youdaoEtymology reads the 词源 paragraph. The block is keyed by language and
+// the Chinese row usually carries the prose; desc is the fallback when only a
+// short note is present.
+func youdaoEtymology(raw json.RawMessage) string {
+	var p struct {
+		Etyms struct {
+			Zh []struct {
+				Value string `json:"value"`
+				Desc  string `json:"desc"`
+			} `json:"zh"`
+		} `json:"etyms"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return ""
+	}
+	for _, e := range p.Etyms.Zh {
+		if v := strings.TrimSpace(e.Value); v != "" {
+			return v
+		}
+		if d := strings.TrimSpace(e.Desc); d != "" {
+			return d
+		}
+	}
+	return ""
+}
+
+// youdaoExams reads the exam tags the ec block carries for the headword
+// (初中, CET4 …). They belong to the word object's section, not to one entry.
+func youdaoExams(raw json.RawMessage) []string {
+	var meta struct {
+		ExamType []string `json:"exam_type"`
+	}
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return nil
+	}
+	var out []string
+	for _, s := range meta.ExamType {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func youdaoWeb(raw json.RawMessage, word string) (web, related []WebDefinition) {
 	var items []youdaoWebItem
 	if err := json.Unmarshal(raw, &items); err != nil {
 		var single youdaoWebItem
 		if err := json.Unmarshal(raw, &single); err != nil {
-			return nil
+			return nil, nil
 		}
 		items = []youdaoWebItem{single}
 	}
 	// The block is a list of compounds containing the query as well as the word
 	// itself ("Apple Pay", "BIG APPLE" beside "apple"). Only the entry keyed by
-	// the query belongs in this word's card; the rest pulled the card toward
-	// whichever phrase the site had seen most often.
+	// the query is a sense of this word; the rest read as related lookups.
 	want := youdaoWordKey(word)
-	var out []WebDefinition
 	for _, item := range items {
 		key := strings.TrimSpace(item.Key)
-		if key == "" || (want != "" && youdaoWordKey(key) != want) {
+		if key == "" {
 			continue
 		}
 		w := WebDefinition{Value: key}
@@ -579,12 +694,18 @@ func youdaoWeb(raw json.RawMessage, word string) []WebDefinition {
 		if len(w.Conts) > 6 {
 			w.Conts = w.Conts[:6]
 		}
-		out = append(out, w)
-		if len(out) >= 10 {
-			break
+		if want == "" || youdaoWordKey(key) == want {
+			web = append(web, w)
+			if len(web) >= 10 {
+				break
+			}
+			continue
+		}
+		if len(related) < 10 {
+			related = append(related, w)
 		}
 	}
-	return out
+	return web, related
 }
 
 // onlyNewWeb drops web senses whose glosses already appear among the word's

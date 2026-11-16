@@ -1,4 +1,8 @@
 import ReactDOM from 'react-dom/client'
+// Imported rather than linked from /style.css in index.html: the bundler then
+// fingerprints the file, so an updated build never reuses WebKit's cached copy
+// of the previous stylesheet.
+import './style.css'
 import App from './App'
 import { isMac } from './api'
 

@@ -5,33 +5,17 @@ import (
 	"testing"
 
 	"transdict/internal/dict"
+	"transdict/internal/ocr"
 	"transdict/internal/query"
 	"transdict/internal/settings"
 	"transdict/internal/translate"
 )
 
-func TestTargetRoutesByContext(t *testing.T) {
-	cases := map[string]string{
-		settings.ContextMain:       WindowMain,
-		settings.ContextScreenshot: WindowMain,
-		settings.ContextClipboard:  WindowMain,
-		settings.ContextFloating:   WindowFloat,
-		settings.ContextODict:      WindowFloat,
-		settings.ContextMini:       WindowMini,
-		"":                         WindowMain,
-	}
-	for context, want := range cases {
-		if got := target(context); got != want {
-			t.Errorf("target(%q) = %q, 期望 %q", context, got, want)
-		}
-	}
-}
-
 func TestContextOfTreatsMissingResultAsMain(t *testing.T) {
 	if got := contextOf(nil); got != settings.ContextMain {
 		t.Errorf("contextOf(nil) = %q", got)
 	}
-	if got := contextOf(&query.Response{Context: settings.ContextMini}); got != settings.ContextMini {
+	if got := contextOf(&query.Response{Context: settings.ContextClipboard}); got != settings.ContextClipboard {
 		t.Errorf("contextOf = %q", got)
 	}
 }
@@ -105,6 +89,22 @@ func TestAnalyzeScreenshotNamesTheMissingEngine(t *testing.T) {
 	}
 	if len(res.Skipped) != 1 || res.Skipped[0] != "百度通用文字识别" {
 		t.Errorf("Skipped = %v, want [百度通用文字识别]", res.Skipped)
+	}
+}
+
+// 图片 OCR 后自动查询 off leaves a screenshot answer with text and nothing else.
+// That is the setting working, not a service that failed to start.
+func TestAnalyzeScreenshotThatStopsAtTextIsQuiet(t *testing.T) {
+	cfg := settings.Config{AutoQueryOCR: false}
+	res := &query.Response{SourceText: "hello world", ImageURL: "data:image/png;base64,eA==",
+		OCR: []ocr.Outcome{{Provider: "ocr", Label: "苹果 OCR", Blocks: []ocr.Block{{Text: "hello world"}}}}}
+	(&Service{}).annotate(res, cfg, query.Request{Context: settings.ContextScreenshot, Image: []byte{1}})
+
+	if res.Error != "" {
+		t.Errorf("关闭自动查询后不该报错，得到 %q", res.Error)
+	}
+	if len(res.Skipped) != 0 {
+		t.Errorf("Skipped = %v, want 空", res.Skipped)
 	}
 }
 
@@ -190,12 +190,12 @@ func TestANewQueryReplacesTheOneBeforeIt(t *testing.T) {
 		t.Error("新查询不是当前查询")
 	}
 
-	// Another window has its own queue: replacing the panel's query must not
-	// cancel what the mini window is still waiting for.
-	_, mini, miniCancel := s.beginRun(settings.ContextMini)
-	defer miniCancel()
-	if !s.currentRun(settings.ContextMini, mini) || !s.currentRun(settings.ContextMain, second) {
-		t.Error("不同窗口的查询互相影响")
+	// Another context has its own queue: replacing the panel's query must not
+	// cancel what a clipboard query is still waiting for.
+	_, clip, clipCancel := s.beginRun(settings.ContextClipboard)
+	defer clipCancel()
+	if !s.currentRun(settings.ContextClipboard, clip) || !s.currentRun(settings.ContextMain, second) {
+		t.Error("不同上下文的查询互相影响")
 	}
 }
 
@@ -208,5 +208,120 @@ func TestPromptRequestIsNotADictionaryQuery(t *testing.T) {
 	}
 	if req.Context != settings.ContextTranslation || req.Mode != "prompt" || req.Prompt != "润色" {
 		t.Errorf("promptRequest = %+v", req)
+	}
+}
+
+func TestCleanQueryTextRemovesCommentSymbols(t *testing.T) {
+	cfg := settings.Config{AutoRemoveComments: true}
+	cases := map[string]string{
+		"// The quick brown\n// fox jumps": "The quick brown fox jumps",
+		"# build:\n# make all":             "build: make all",
+		"// 待办\n// 明天处理":                   "待办明天处理",
+		"/* hello world */":                "hello world",
+		"code := 1\n/* note */":            "code := 1\nnote",
+		"plain text":                       "plain text",
+	}
+	for in, want := range cases {
+		if got := cleanQueryText(in, cfg); strings.TrimSpace(got) != want {
+			t.Errorf("cleanQueryText(%q) = %q, 期望 %q", in, got, want)
+		}
+	}
+}
+
+func TestCleanQueryTextKeepsTextWhenOptionsAreOff(t *testing.T) {
+	in := "// The quick\n// brown fox"
+	if got := cleanQueryText(in, settings.Config{}); got != in {
+		t.Errorf("选项关闭时不该改动原文: %q", got)
+	}
+}
+
+func TestCleanQueryTextJoinsLinesOnRequest(t *testing.T) {
+	cfg := settings.Config{ReplaceNewlineSpace: true}
+	got := cleanQueryText("one\n two\r\nthree", cfg)
+	if got != "one two three" {
+		t.Errorf("换行未替换成空格: %q", got)
+	}
+}
+
+// 快捷动作 rewrites the text the same way the query-time options do, but on
+// demand: the menu and the settings switches must never drift apart.
+func TestTransformTextQuickActions(t *testing.T) {
+	var s Service
+	cases := []struct{ action, in, want string }{
+		{"newline", "one\n two\r\nthree", "one two three"},
+		{"comments", "// The quick\n// fox", "The quick fox"},
+		{"comments", "/* hello */", "hello"},
+		{"words", "key_value", "key value"},
+		{"words", "hello world", "hello world"},
+		{"unknown", "as is", "as is"},
+	}
+	for _, c := range cases {
+		if got := s.TransformText(c.in, c.action); got != c.want {
+			t.Errorf("TransformText(%q, %q) = %q, 期望 %q", c.in, c.action, got, c.want)
+		}
+	}
+}
+
+// 查询时自动分词 only touches a single token: a sentence keeps its own spaces.
+func TestCleanQueryTextSegmentsASingleIdentifier(t *testing.T) {
+	cfg := settings.Config{AutoWordSegment: true}
+	cases := map[string]string{
+		"key_value":              "key value",
+		"anchoredDraggableState": "anchored Draggable State",
+		"GetHTTPCode":            "Get HTTP Code",
+		"hello world":            "hello world",
+		"HTTPServer":             "HTTP Server",
+	}
+	for in, want := range cases {
+		if got := cleanQueryText(in, cfg); got != want {
+			t.Errorf("cleanQueryText(%q) = %q, 期望 %q", in, got, want)
+		}
+	}
+	if got := cleanQueryText("key_value", settings.Config{}); got != "key_value" {
+		t.Errorf("关闭分词后不该改动原文: %q", got)
+	}
+}
+
+// The dictionary is what tells an identifier from a word with capitals inside;
+// the test stands in for Dictionary Services so it runs on any machine.
+func TestSegmentationLeavesKnownWordsAlone(t *testing.T) {
+	old := knownWord
+	knownWord = func(s string) bool { return s == "iPad" || s == "LaTeX" }
+	defer func() { knownWord = old }()
+
+	for _, word := range []string{"iPad", "LaTeX"} {
+		if got := segmentWords(word); got != word {
+			t.Errorf("%q 被拆成了 %q", word, got)
+		}
+	}
+	if got := segmentWords("goodMorning"); got != "good Morning" {
+		t.Errorf("goodMorning = %q, 期望拆开", got)
+	}
+	if got := segmentWords("'UIKit'"); got != "UIKit" {
+		t.Errorf("引号包裹的词 = %q, 期望只去掉引号", got)
+	}
+	if got := segmentWords("“UIKit”"); got != "UIKit" {
+		t.Errorf("中文引号 = %q, 期望只去掉引号", got)
+	}
+	if got := segmentWords("plain text here"); got != "plain text here" {
+		t.Errorf("含空格的文本不该分词: %q", got)
+	}
+}
+
+// 英文发音 only changes the voice for English; a Chinese sentence keeps the code
+// its detection produced, and the default stays on the American voice.
+func TestSpeakLangPicksTheEnglishVoice(t *testing.T) {
+	cases := []struct{ lang, pref, want string }{
+		{"en", "us", "en-US"},
+		{"en", "uk", "en-GB"},
+		{"en-US", "uk", "en-GB"},
+		{"zh-CN", "uk", "zh-CN"},
+		{"auto", "uk", "auto"},
+		{"en", "", "en-US"},
+	}
+	for _, c := range cases {
+		if got := speakLang(c.lang, c.pref); got != c.want {
+			t.Errorf("speakLang(%q, %q) = %q, want %q", c.lang, c.pref, got, c.want)
+		}
 	}
 }

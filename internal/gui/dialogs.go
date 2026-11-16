@@ -12,6 +12,7 @@ import (
 
 	"transdict/internal/history"
 	"transdict/internal/l10n"
+	"transdict/internal/settings"
 )
 
 // PickDirectory answers a field declared Folder: true. Typing the path to a
@@ -70,6 +71,21 @@ func (s *Service) ImportConfigFile() (string, error) {
 	return path, nil
 }
 
+// PickBlockedApp asks for an app and answers the row 禁止名单 stores. The panel
+// is the Finder's own 打开 sheet, so a bundle is picked visually instead of
+// typed as a bundle identifier.
+func (s *Service) PickBlockedApp() (settings.BlockedApp, error) {
+	path, err := s.wails.Dialog.OpenFile().
+		SetMessage(l10n.T("选择要禁止划词的应用")).
+		AddFilter(l10n.T("应用"), "*.app").
+		TreatsFilePackagesAsDirectories(false).
+		PromptForSingleSelection()
+	if err != nil || path == "" {
+		return settings.BlockedApp{}, err
+	}
+	return readAppBundle(path)
+}
+
 // SaveHistoryFile asks where the log should go and writes it there, returning
 // the path chosen.
 func (s *Service) SaveHistoryFile(needle string, favoritesOnly bool, service, format string) (string, error) {
@@ -90,6 +106,27 @@ func (s *Service) SaveHistoryFile(needle string, favoritesOnly bool, service, fo
 	}
 	path = withExt(path, ext)
 	if err := os.WriteFile(path, []byte(s.history.Export(filter, format)), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// SaveLogFile asks where the log should go and writes it there, returning the
+// path chosen.
+func (s *Service) SaveLogFile() (string, error) {
+	data, err := logBytes()
+	if err != nil {
+		return "", err
+	}
+	path, err := s.wails.Dialog.SaveFile().
+		SetMessage(l10n.T("导出日志")).
+		SetFilename("transdict.log").
+		PromptForSingleSelection()
+	if err != nil || path == "" {
+		return "", err
+	}
+	path = withExt(path, "log")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return "", err
 	}
 	return path, nil

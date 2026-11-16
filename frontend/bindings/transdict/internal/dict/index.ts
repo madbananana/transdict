@@ -6,6 +6,8 @@ export type {
     Entry,
     Example,
     Phonetic,
+    Phrase,
     Result,
+    Thesaurus,
     WebDefinition
 } from "./models.js";

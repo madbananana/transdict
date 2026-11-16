@@ -61,8 +61,8 @@ func TestTrayMenuShowsEveryKeyedActionAndThePinTick(t *testing.T) {
 		settings.SlotInput:     {"alt+shift+d"},
 		settings.SlotSelection: {"alt+shift+s"},
 		settings.SlotClipboard: {"alt+shift+v"},
-		settings.SlotMini:      {"alt+shift+m"},
 		settings.SlotReplace:   {"alt+shift+r"},
+		settings.SlotPolish:    {"alt+shift+p"},
 		settings.SlotODict:     {"alt+shift+w"},
 		settings.SlotSettings:  {"alt+shift+o"},
 	}
@@ -71,12 +71,12 @@ func TestTrayMenuShowsEveryKeyedActionAndThePinTick(t *testing.T) {
 
 	labels := map[string]string{
 		settings.SlotCapture:   "截图翻译",
-		settings.SlotSilentOCR: "静音 OCR",
+		settings.SlotSilentOCR: "静默截图 OCR",
 		settings.SlotInput:     "输入翻译",
 		settings.SlotSelection: "划词翻译",
 		settings.SlotClipboard: "剪贴板翻译",
-		settings.SlotMini:      "迷你窗",
-		settings.SlotReplace:   "翻译并替换选区",
+		settings.SlotReplace:   "翻译并替换",
+		settings.SlotPolish:    "润色并替换",
 		settings.SlotODict:     "鼠标取词",
 		settings.SlotSettings:  "服务设置",
 	}
@@ -100,11 +100,102 @@ func TestTrayMenuShowsEveryKeyedActionAndThePinTick(t *testing.T) {
 	if !pin.IsCheckbox() || !pin.Checked() {
 		t.Errorf("置顶译窗 = checkbox:%v checked:%v, want 勾选的复选框", pin.IsCheckbox(), pin.Checked())
 	}
-	for _, name := range []string{"界面语言", "主题", "翻译历史记录", "退出 Transdict"} {
+	for _, name := range []string{"界面语言", "主题", "翻译历史记录", "退出 Transdict",
+		"截图 OCR", "剪贴板 OCR", "显示 OCR 窗口", "关于 Transdict", "反馈", "菜单栏图标"} {
 		if menu.FindByLabel(l10n.T(name)) == nil {
 			t.Errorf("菜单缺少 %q", name)
 		}
 	}
+}
+
+// 显示 OCR 菜单项 off leaves the translation entries alone; a menu that still
+// showed the OCR trio would be longer for something the user turned off.
+func TestTrayMenuFollowsTheOCRMenuSwitch(t *testing.T) {
+	cfg := settings.Default()
+	if !cfg.ShowOCRMenu {
+		t.Fatal("显示 OCR 菜单项 应当默认开启")
+	}
+	cfg.ShowOCRMenu = false
+	menu := trayMenu(cfg, trayActions{})
+	for _, label := range []string{"截图 OCR", "剪贴板 OCR", "OCR 窗口"} {
+		if menu.FindByLabel(l10n.T(label)) != nil {
+			t.Errorf("关闭后菜单仍显示 %q", label)
+		}
+	}
+	if menu.FindByLabel(l10n.T("截图翻译")) == nil {
+		t.Error("关闭 OCR 菜单项不应影响截图翻译")
+	}
+}
+
+// The style is a pair of embedded images; a build without the square one must
+// keep drawing the bare mark rather than hand SetTemplateIcon nothing.
+func TestTrayGlyphFollowsTheIconStyle(t *testing.T) {
+	bare, square := []byte("bare"), []byte("square")
+	if got := trayGlyph(settings.MenuBarIconRounded, bare, square); string(got) != "bare" {
+		t.Errorf("圆角 = %q", got)
+	}
+	if got := trayGlyph(settings.MenuBarIconSquare, bare, square); string(got) != "square" {
+		t.Errorf("方形 = %q", got)
+	}
+	if got := trayGlyph(settings.MenuBarIconSquare, bare, nil); string(got) != "bare" {
+		t.Errorf("缺少方形图片时 = %q, want 退回圆角", got)
+	}
+}
+
+// 菜单栏图标 is the only place the style can be chosen, so both entries stay
+// visible and the tick follows the stored value — a menu with neither entry
+// ticked would not say which icon is drawing the status item.
+func TestTrayMenuTicksTheMenuBarIconStyle(t *testing.T) {
+	cfg := settings.Default()
+	if cfg.MenuBarIconStyle != settings.MenuBarIconRounded {
+		t.Fatalf("默认图标样式 = %q, want rounded", cfg.MenuBarIconStyle)
+	}
+	check := func(cfg settings.Config, name string, want bool) {
+		t.Helper()
+		it := trayMenu(cfg, trayActions{}).FindByLabel(l10n.T(name))
+		if it == nil {
+			t.Fatalf("菜单缺少 %q", name)
+		}
+		if !it.IsCheckbox() || it.Checked() != want {
+			t.Errorf("%s = checkbox:%v checked:%v, want checked:%v", name, it.IsCheckbox(), it.Checked(), want)
+		}
+	}
+	check(cfg, "圆角", true)
+	check(cfg, "方形", false)
+
+	cfg.MenuBarIconStyle = settings.MenuBarIconSquare
+	check(cfg, "圆角", false)
+	check(cfg, "方形", true)
+}
+
+// 界面语言 and 主题 are tick groups too: the menu is where these values are
+// read, so every option stays visible and only the live one carries the tick.
+func TestTrayMenuTicksLanguageAndTheme(t *testing.T) {
+	cfg := settings.Default()
+	check := func(cfg settings.Config, name string, want bool) {
+		t.Helper()
+		it := trayMenu(cfg, trayActions{}).FindByLabel(l10n.T(name))
+		if it == nil {
+			t.Fatalf("菜单缺少 %q", name)
+		}
+		if !it.IsCheckbox() || it.Checked() != want {
+			t.Errorf("%s = checkbox:%v checked:%v, want checked:%v", name, it.IsCheckbox(), it.Checked(), want)
+		}
+	}
+	cfg.UILang, cfg.Theme = "zh-CN", "auto"
+	check(cfg, "简体中文", true)
+	check(cfg, "English", false)
+	check(cfg, "跟随系统", true)
+	check(cfg, "浅色", false)
+	check(cfg, "深色", false)
+
+	cfg.UILang, cfg.Theme = "en", "dark"
+	l10n.Set("en")
+	defer l10n.Set("zh-CN")
+	check(cfg, "English", true)
+	check(cfg, "深色", true)
+	check(cfg, "跟随系统", false)
+	check(cfg, "浅色", false)
 }
 
 // A cleared shortcut must leave the menu item bare rather than showing a key
@@ -134,13 +225,15 @@ func TestWakeCommandReadsOnlyKnownWindowNames(t *testing.T) {
 		"input":     "input",
 		"settings":  "settings",
 		"history":   "history",
-		"mini":      "mini",
 		"clipboard": "clipboard",
 		"select":    "select",
 		"odict":     "odict",
 		"replace":   "replace",
+		"polish":    "polish",
 		"silent":    "silent",
 		"capture":   "capture",
+		"ocr":       "ocr",
+		"update":    "update",
 	}
 	for arg, want := range cases {
 		if got := wakeCommand([]string{"transdict", arg}); got != want {
@@ -150,7 +243,8 @@ func TestWakeCommandReadsOnlyKnownWindowNames(t *testing.T) {
 	for _, args := range [][]string{
 		{"transdict"},
 		{"transdict", "-psn_0_12345"},
-		{"transdict", "miniature"},
+		{"transdict", "clipfloats"},
+		{"transdict", "clipfloat"},
 		{"transdict", "--help"},
 	} {
 		if got := wakeCommand(args); got != "main" {
