@@ -215,6 +215,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # The release body comes from the tag's own message, which only exists
+          # locally when tags are fetched; checkout does not fetch them by default.
+          fetch-tags: true
 
       - uses: actions/download-artifact@v4
         with:
