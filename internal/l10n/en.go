@@ -423,7 +423,6 @@ var en = map[string]string{
 	"Windows 系统 OCR":                        "Windows OCR",
 	"调用 Windows 自带的 OCR（Windows.Media.Ocr），离线、免密钥；识别语言取决于系统已安装的语言包。": "Calls the OCR engine built into Windows (Windows.Media.Ocr); offline, no key, and the languages follow the packs installed in the system.",
 	"Windows OCR 没有返回结果":      "Windows OCR returned nothing",
-	"Windows OCR 返回了无法解码的内容":  "Windows OCR returned an undecodable payload",
 	"Windows OCR 返回了无法解析的结果":  "Windows OCR returned an unreadable result",
 	"Windows OCR 调用失败：%s":     "Windows OCR failed: %s",
 	"Windows OCR：无法创建临时目录：%w": "Windows OCR: cannot create a temporary folder: %w",

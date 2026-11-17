@@ -1,47 +1,83 @@
 package ocr
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"errors"
+	"net/url"
+	"strconv"
 	"strings"
 )
 
-// winOCRResponse is what the Windows helper answers: the recognized lines, the
-// engine that read them, or the reason no engine could run. The payload travels
-// base64-encoded so a console code page can never mangle the Chinese text.
-type winOCRResponse struct {
-	Blocks []Block `json:"blocks"`
-	Engine string  `json:"engine"`
-	Error  string  `json:"error"`
-}
-
-// decodeWinOCR parses the helper's stdout. It is separate from the provider so
-// the payload contract can be tested on any platform.
+// decodeWinOCR parses the helper's result file: one record per line, fields
+// separated by a pipe, free text percent-encoded so a newline in a recognized
+// line cannot split it. It is separate from the provider so the contract can be
+// tested on any platform.
 func decodeWinOCR(raw []byte) ([]Block, error) {
-	encoded := strings.TrimSpace(strings.TrimPrefix(string(raw), "\ufeff"))
-	if encoded == "" {
+	text := strings.TrimPrefix(string(raw), "\ufeff")
+	if strings.TrimSpace(text) == "" {
 		return nil, errors.New("Windows OCR 没有返回结果")
 	}
-	payload, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, errors.New("Windows OCR 返回了无法解码的内容")
-	}
-	var resp winOCRResponse
-	if err := json.Unmarshal(payload, &resp); err != nil {
-		return nil, errors.New("Windows OCR 返回了无法解析的结果")
-	}
-	if resp.Error != "" {
-		return nil, errors.New(resp.Error)
-	}
-	blocks := make([]Block, 0, len(resp.Blocks))
-	for _, b := range resp.Blocks {
-		b.Text = strings.TrimSpace(b.Text)
-		if b.Text == "" {
+	var blocks []Block
+	sawRecord := false
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" {
 			continue
 		}
-		blocks = append(blocks, b)
+		fields := strings.SplitN(line, "|", 7)
+		switch fields[0] {
+		case "engine":
+			sawRecord = true
+		case "error":
+			sawRecord = true
+			reason := ""
+			if len(fields) > 1 {
+				reason, _ = url.PathUnescape(fields[1])
+			}
+			if reason == "" {
+				reason = "Windows OCR 返回了无法解析的结果"
+			}
+			return nil, errors.New(reason)
+		case "block":
+			sawRecord = true
+			if b, ok := parseWinOCRBlock(fields); ok {
+				blocks = append(blocks, b)
+			}
+		}
+	}
+	if !sawRecord {
+		return nil, errors.New("Windows OCR 返回了无法解析的结果")
 	}
 	sortBlocksReadingOrder(blocks)
 	return blocks, nil
+}
+
+func parseWinOCRBlock(fields []string) (Block, bool) {
+	if len(fields) != 7 {
+		return Block{}, false
+	}
+	var box [4]int
+	for i := range box {
+		n, err := strconv.Atoi(fields[i+1])
+		if err != nil {
+			return Block{}, false
+		}
+		box[i] = n
+	}
+	text, err := url.PathUnescape(fields[6])
+	if err != nil {
+		return Block{}, false
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return Block{}, false
+	}
+	score, _ := strconv.ParseFloat(fields[5], 64)
+	return Block{
+		Text:   text,
+		X:      box[0],
+		Y:      box[1],
+		Width:  box[2],
+		Height: box[3],
+		Score:  score,
+	}, true
 }

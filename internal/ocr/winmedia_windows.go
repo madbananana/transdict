@@ -61,9 +61,12 @@ func (windowsOCR) Recognize(ctx context.Context, png []byte) ([]Block, error) {
 		return nil, fmt.Errorf("Windows OCR：无法写入识别脚本：%w", err)
 	}
 
+	// The result goes to a file rather than stdout: a GUI process has no usable
+	// console, and a file also keeps the Chinese text away from code pages.
+	resultPath := filepath.Join(dir, "result.txt")
 	args := []string{
 		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-		"-File", scriptPath, "-ImagePath", imgPath,
+		"-File", scriptPath, "-ImagePath", imgPath, "-OutputPath", resultPath,
 	}
 	if hint := LangFromContext(ctx); hint != "" {
 		args = append(args, "-Languages", hint)
@@ -85,8 +88,7 @@ func (windowsOCR) Recognize(ctx context.Context, png []byte) ([]Block, error) {
 	// The app is a GUI process; without this every capture would flash a
 	// console window over the screenshot.
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
+	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		reason := strings.TrimSpace(stderr.String())
@@ -96,7 +98,12 @@ func (windowsOCR) Recognize(ctx context.Context, png []byte) ([]Block, error) {
 		log.Printf("transdict: Windows OCR 调用失败: %v: %s", err, reason)
 		return nil, fmt.Errorf("Windows OCR 调用失败：%s", reason)
 	}
-	blocks, err := decodeWinOCR(stdout.Bytes())
+	result, err := os.ReadFile(resultPath)
+	if err != nil {
+		log.Printf("transdict: Windows OCR 没有写出结果: %v", err)
+		return nil, fmt.Errorf("Windows OCR 没有返回结果：%w", err)
+	}
+	blocks, err := decodeWinOCR(result)
 	if err != nil {
 		// The preview shows this to the user; the log keeps the whole sentence
 		// for a bug report, including the PowerShell line number.
@@ -107,9 +114,19 @@ func (windowsOCR) Recognize(ctx context.Context, png []byte) ([]Block, error) {
 
 // windowsOCRPowerShell awaits the WinRT async chain (file → stream → decoder →
 // software bitmap → recognition), picks a recognizer for the requested or an
-// installed language, and returns the lines with their pixel boxes as base64
-// JSON. The script stays ASCII apart from its message literals, which the BOM
-// above protects.
+// installed language, and writes the lines with their pixel boxes to -OutputPath
+// as a pipe-separated text protocol:
+//
+//	engine|<tag>
+//	block|<x>|<y>|<w>|<h>|<score>|<text>
+//	error|<message>
+//
+// Every free-text field is percent-encoded with Uri.EscapeDataString, so a
+// newline inside a recognized line cannot split the record and the console code
+// page cannot mangle Chinese. v0.1.2 serialized the whole payload with
+// ConvertTo-Json on stdout and failed inside the GUI process at the
+// Write-Payload call; the file protocol has no serializer and no console left
+// to go wrong.
 //
 // The awaiter is picked from GetAwaiter and matched on the exact closed generic
 // IAsyncOperation`1. The AsTask overloads differ in progress reporting, and
@@ -117,16 +134,11 @@ func (windowsOCR) Recognize(ctx context.Context, png []byte) ([]Block, error) {
 const windowsOCRPowerShell = `
 param(
   [Parameter(Mandatory=$true)][string]$ImagePath,
+  [Parameter(Mandatory=$true)][string]$OutputPath,
   [string]$Languages = ''
 )
 
 $ErrorActionPreference = 'Stop'
-
-function Write-Payload($payload) {
-  $json = $payload | ConvertTo-Json -Compress -Depth 8
-  $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
-  [Console]::Out.Write($b64)
-}
 
 try {
   Add-Type -AssemblyName System.Runtime.WindowsRuntime | Out-Null
@@ -191,7 +203,7 @@ try {
   }
   foreach ($tag in $installed) { Add-Candidate $tag }
 
-  $blocks = New-Object 'System.Collections.Generic.List[object]'
+  $out = New-Object 'System.Collections.Generic.List[string]'
   $engineUsed = ''
   $failure = ''
   foreach ($tag in $candidates) {
@@ -241,17 +253,19 @@ try {
         $w = [int][Math]::Round($maxX - $minX)
         $h = [int][Math]::Round($maxY - $minY)
       }
-      [void]$blocks.Add([ordered]@{ text = $text; x = $x; y = $y; width = $w; height = $h; score = 0 })
+      $escaped = [Uri]::EscapeDataString($text)
+      [void]$out.Add("block|$x|$y|$w|$h|0|$escaped")
     }
     $engineUsed = $tag
     break
   }
 
-  if ($blocks.Count -eq 0 -and $failure -ne '') {
+  if ($out.Count -eq 0 -and $failure -ne '') {
     throw "识别失败（$failure）"
   }
 
-  Write-Payload ([ordered]@{ blocks = @($blocks); engine = $engineUsed })
+  $out.Insert(0, "engine|" + [Uri]::EscapeDataString($engineUsed))
+  [void][IO.File]::WriteAllText($OutputPath, ($out -join [Environment]::NewLine), [Text.Encoding]::UTF8)
 } catch {
   $reason = $_.Exception.Message
   $inner = $_.Exception.InnerException
@@ -269,6 +283,6 @@ try {
     $diag += "；OCR 引擎不可用"
   }
   $reason = "$reason [$diag]"
-  Write-Payload ([ordered]@{ blocks = @(); engine = ''; error = $reason })
+  [void][IO.File]::WriteAllText($OutputPath, ("error|" + [Uri]::EscapeDataString($reason)), [Text.Encoding]::UTF8)
 }
 `
