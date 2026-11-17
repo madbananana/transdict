@@ -291,6 +291,17 @@ export function ImportConfigFile(): $CancellablePromise<string> {
 }
 
 /**
+ * InstallUpdate is 下载并安装 on the settings page. It fetches the release
+ * again, downloads the one asset this OS installs, and hands it to the system.
+ * On Windows the installer replaces the running executable, so the call answers
+ * first and the app quits a moment later; on macOS and Linux the package opens
+ * beside the running app.
+ */
+export function InstallUpdate(): $CancellablePromise<string> {
+    return $Call.ByID(1817311122);
+}
+
+/**
  * LastCaptureArea hands the overlay the rectangle of 上一次截图区域, which the D
  * key applies without asking for the same drag again. It answers only for the
  * display the rectangle was taken on: pixel coordinates mean a different crop
@@ -456,6 +467,14 @@ export function OpenQuickLink(raw: string): $CancellablePromise<void> {
  */
 export function OpenSettings(): $CancellablePromise<void> {
     return $Call.ByID(3834230405);
+}
+
+/**
+ * OpenUpdatePage opens the release page of the newest published build. It goes
+ * through the same source as 检查更新 so a custom feed keeps working.
+ */
+export function OpenUpdatePage(): $CancellablePromise<void> {
+    return $Call.ByID(1763638234);
 }
 
 /**

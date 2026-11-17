@@ -162,3 +162,37 @@ func TestFetchHidesABetaOnlySource(t *testing.T) {
 		t.Errorf("包括 Beta 时应该报出预发布版本: %+v %v", rel, err)
 	}
 }
+
+// GitHub's own "url" on a release is its API entry; the page a user can open
+// is html_url. Assets carry browser_download_url, and an in-app update has to
+// read that rather than the API endpoint.
+func TestFetchReadsAssetsAndTheReleasePage(t *testing.T) {
+	srv := serve(t, http.StatusOK, `{
+		"tag_name":"v1.4.0",
+		"url":"https://api.example.test/releases/17",
+		"html_url":"https://example.test/releases/v1.4.0",
+		"assets":[
+			{"name":"app.dmg","browser_download_url":"https://example.test/app.dmg","url":"https://api.example.test/assets/1","size":1234,"digest":"sha256:abcd"},
+			{"name":"app-installer.exe","browser_download_url":"https://example.test/app-installer.exe","size":4321}
+		]
+	}`)
+	rel, err := Fetch(context.Background(), srv.URL, false)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if rel.URL != "https://example.test/releases/v1.4.0" {
+		t.Errorf("发布页 = %q, want html_url", rel.URL)
+	}
+	if len(rel.Assets) != 2 {
+		t.Fatalf("assets = %+v", rel.Assets)
+	}
+	if rel.Assets[0].URL != "https://example.test/app.dmg" || rel.Assets[0].Size != 1234 {
+		t.Errorf("asset = %+v, want browser_download_url", rel.Assets[0])
+	}
+	if rel.Assets[0].Digest != "sha256:abcd" {
+		t.Errorf("digest = %q, want sha256:abcd", rel.Assets[0].Digest)
+	}
+	if rel.Assets[1].URL != "https://example.test/app-installer.exe" {
+		t.Errorf("没有 browser_download_url 时应退回 url: %+v", rel.Assets[1])
+	}
+}

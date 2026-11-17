@@ -105,6 +105,20 @@ export function onConfig(fn: () => void): () => void {
   return Events.On('app:config', () => fn())
 }
 
+/** UpdateProgress is one download step, emitted while 下载并安装 streams the
+ * installer. Percent is zero when the server did not advertise a length. */
+export interface UpdateProgress {
+  percent: number
+  received: number
+  total: number
+}
+
+export function onUpdateProgress(fn: (p: UpdateProgress) => void): () => void {
+  return Events.On('app:update-progress', (ev: { data: UpdateProgress }) => {
+    if (ev.data) fn(ev.data)
+  })
+}
+
 // A single element reused for every read-aloud: creating one per click leaves
 // the previous voice playing underneath the new one.
 let clip: HTMLAudioElement | null = null

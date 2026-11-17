@@ -29,25 +29,52 @@ const checkTimeout = 10 * time.Second
 const bodyLimit = 1 << 20
 
 // Release is what a user needs in order to act: which version exists, where to
-// get it, and what changed.
+// get it, and what changed. Assets is what an in-app download chooses from; a
+// manifest that only carries the page URL is still enough to open it.
 type Release struct {
-	Version string `json:"version"`
-	URL     string `json:"url"`
-	Notes   string `json:"notes"`
+	Version string  `json:"version"`
+	URL     string  `json:"url"`
+	Notes   string  `json:"notes"`
+	Assets  []Asset `json:"assets"`
 }
+
+// Asset is one downloadable file of a release. Digest is GitHub's
+// "sha256:…" spelling when the source provides one; it is checked after the
+// download so a truncated or swapped file is never handed to the installer.
+type Asset struct {
+	Name   string `json:"name"`
+	URL    string `json:"url"`
+	Size   int64  `json:"size"`
+	Digest string `json:"digest"`
+}
+
+// DefaultSource is the official release feed: the repository's own releases.
+// It is used when the user has not pointed 更新源地址 somewhere else.
+const DefaultSource = "https://api.github.com/repos/madbananana/transdict/releases"
 
 // manifest accepts the two shapes a release can be published in: the flat
 // document this app would serve itself, and a GitHub Releases API entry, whose
 // tag_name/html_url/body say the same three things in other words. prerelease
-// only appears in the list GitHub returns rather than in one entry.
+// only appears in the list GitHub returns rather than in one entry. GitHub
+// spells an asset as browser_download_url and its API url as "url", so both
+// shapes are read here rather than at the call site.
 type manifest struct {
-	Version    string `json:"version"`
-	Tag        string `json:"tag_name"`
+	Version    string          `json:"version"`
+	Tag        string          `json:"tag_name"`
+	URL        string          `json:"url"`
+	HTMLURL    string          `json:"html_url"`
+	Notes      string          `json:"notes"`
+	Body       string          `json:"body"`
+	Prerelease bool            `json:"prerelease"`
+	Assets     []manifestAsset `json:"assets"`
+}
+
+type manifestAsset struct {
+	Name       string `json:"name"`
 	URL        string `json:"url"`
-	HTMLURL    string `json:"html_url"`
-	Notes      string `json:"notes"`
-	Body       string `json:"body"`
-	Prerelease bool   `json:"prerelease"`
+	BrowserURL string `json:"browser_download_url"`
+	Size       int64  `json:"size"`
+	Digest     string `json:"digest"`
 }
 
 // Fetch reads the manifest at url. Anything that does not name a version is an
@@ -109,8 +136,17 @@ func pick(data []byte, includeBeta bool) (*Release, error) {
 	for _, m := range list {
 		rel := &Release{
 			Version: firstOf(m.Version, m.Tag),
-			URL:     firstOf(m.URL, m.HTMLURL),
-			Notes:   firstOf(m.Notes, m.Body),
+			// GitHub's own "url" is the API entry; html_url is the page a user
+			// can open. The flat shape has only the one field.
+			URL:   firstOf(m.HTMLURL, m.URL),
+			Notes: firstOf(m.Notes, m.Body),
+		}
+		for _, a := range m.Assets {
+			url := firstOf(a.BrowserURL, a.URL)
+			if a.Name == "" || url == "" {
+				continue
+			}
+			rel.Assets = append(rel.Assets, Asset{Name: a.Name, URL: url, Size: a.Size, Digest: a.Digest})
 		}
 		if rel.Version == "" {
 			continue

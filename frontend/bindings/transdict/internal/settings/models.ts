@@ -180,9 +180,9 @@ export interface Config {
     "settingsH": number;
 
     /**
-     * UpdateURL is the release manifest 检查更新 reads. It starts empty because
-     * only the user knows where their builds are published, and an address this
-     * code guessed would fail forever without saying why.
+     * UpdateURL is the release manifest 检查更新 reads. Empty means the official
+     * GitHub release feed; a custom address is for a fork or a mirror, because
+     * the app cannot know where somebody else's builds are published.
      */
     "updateURL": string;
 

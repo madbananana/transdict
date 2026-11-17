@@ -160,9 +160,9 @@ type Config struct {
 	SettingsW int `json:"settingsW"`
 	SettingsH int `json:"settingsH"`
 
-	// UpdateURL is the release manifest 检查更新 reads. It starts empty because
-	// only the user knows where their builds are published, and an address this
-	// code guessed would fail forever without saying why.
+	// UpdateURL is the release manifest 检查更新 reads. Empty means the official
+	// GitHub release feed; a custom address is for a fork or a mirror, because
+	// the app cannot know where somebody else's builds are published.
 	UpdateURL string `json:"updateURL"`
 
 	// AutoUpdate asks once per launch and only speaks up when the source is

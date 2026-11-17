@@ -41,6 +41,9 @@ const (
 	// app rather than to a webview, so Go picks the query window that holds the
 	// keyboard and tells that one window which action to run.
 	EventMenuAction = "app:menu-action"
+	// EventUpdateProgress reports an in-app update download. It is addressed to
+	// the settings page, the only place that starts one.
+	EventUpdateProgress = "app:update-progress"
 )
 
 // MenuAction names one 快捷键 menu item and the window it belongs to. The menu

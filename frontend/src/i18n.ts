@@ -286,13 +286,17 @@ const en: Record<string, string> = {
   '一个 JSON 文档，写明最新版本号与下载地址；GitHub 的 Releases API 直接可用。':
     'A JSON document naming the newest version and where to get it; a GitHub Releases API URL works as it is.',
   '自动检查应用更新': 'Automatically check for updates',
-  '只在发现新版本时提示；地址留空即完全不联网。':
-    'Only a newer release produces a notice; with no address nothing is contacted.',
+  '只在发现新版本时提示；地址留空时使用官方 GitHub 发布源。':
+    'Only a newer release produces a notice; an empty address uses the official GitHub release feed.',
   '包括 Beta 版本': 'Include beta versions',
   '抢先体验新功能，但可能不稳定':
     'Get new features early, though they may be unstable',
   '检查更新': 'Check for updates',
   '立即检查': 'Check now',
+  '下载并安装': 'Download and install',
+  '正在下载更新…': 'Downloading update…',
+  '正在下载更新… {n}%': 'Downloading update… {n}%',
+  '打开发布页': 'Open release page',
   '当前版本 {v}': 'Version {v}',
   '检查更新…': 'Checking for updates…',
   '发现新版本 {v}（当前 {c}）': 'Version {v} is available (you have {c})',

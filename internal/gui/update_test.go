@@ -79,3 +79,12 @@ func TestUpdateReportCarriesIncludeBeta(t *testing.T) {
 		t.Errorf("打开包括 Beta 后应该报出预发布版本: %+v", beta)
 	}
 }
+
+func TestUpdateSourceFallsBackToTheOfficialFeed(t *testing.T) {
+	if got := updateSource(""); got == "" || !strings.Contains(got, "madbananana/transdict") {
+		t.Errorf("空地址应指向官方发布源, got %q", got)
+	}
+	if got := updateSource("  https://example.test/r.json "); got != "https://example.test/r.json" {
+		t.Errorf("自定义地址应原样保留, got %q", got)
+	}
+}

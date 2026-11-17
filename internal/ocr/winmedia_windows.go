@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,9 +93,16 @@ func (windowsOCR) Recognize(ctx context.Context, png []byte) ([]Block, error) {
 		if reason == "" {
 			reason = err.Error()
 		}
+		log.Printf("transdict: Windows OCR 调用失败: %v: %s", err, reason)
 		return nil, fmt.Errorf("Windows OCR 调用失败：%s", reason)
 	}
-	return decodeWinOCR(stdout.Bytes())
+	blocks, err := decodeWinOCR(stdout.Bytes())
+	if err != nil {
+		// The preview shows this to the user; the log keeps the whole sentence
+		// for a bug report, including the PowerShell line number.
+		log.Printf("transdict: Windows OCR: %v", err)
+	}
+	return blocks, err
 }
 
 // windowsOCRPowerShell awaits the WinRT async chain (file → stream → decoder →
@@ -123,13 +131,11 @@ function Write-Payload($payload) {
 try {
   Add-Type -AssemblyName System.Runtime.WindowsRuntime | Out-Null
   [Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime] | Out-Null
-  [Windows.Storage.Streams.IRandomAccessStream, Windows.Storage.Streams, ContentType=WindowsRuntime] | Out-Null
   [Windows.Storage.Streams.RandomAccessStream, Windows.Storage.Streams, ContentType=WindowsRuntime] | Out-Null
   [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType=WindowsRuntime] | Out-Null
   [Windows.Graphics.Imaging.SoftwareBitmap, Windows.Graphics.Imaging, ContentType=WindowsRuntime] | Out-Null
   [Windows.Globalization.Language, Windows.Globalization, ContentType=WindowsRuntime] | Out-Null
   [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime] | Out-Null
-  [Windows.Media.Ocr.OcrResult, Windows.Foundation, ContentType=WindowsRuntime] | Out-Null
 
   # GetAwaiter is generic over IAsyncOperation; 96 is the backtick that
   # separates the CLR name from its type argument (a literal one would close
@@ -253,6 +259,16 @@ try {
   if ($_.InvocationInfo -and $_.InvocationInfo.ScriptLineNumber) {
     $reason = "$reason（脚本第 $($_.InvocationInfo.ScriptLineNumber) 行）"
   }
+  # A failure report that names the PowerShell and the OCR languages saves a
+  # round trip through the user for the two causes a wrong script cannot see.
+  $diag = "PowerShell $($PSVersionTable.PSVersion) $([System.Environment]::OSVersion.VersionString)"
+  try {
+    $langs = @([Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages | ForEach-Object { [string]$_.LanguageTag })
+    if ($langs.Count -gt 0) { $diag += "；已安装 OCR：" + ($langs -join ', ') } else { $diag += "；已安装 OCR：无" }
+  } catch {
+    $diag += "；OCR 引擎不可用"
+  }
+  $reason = "$reason [$diag]"
   Write-Payload ([ordered]@{ blocks = @(); engine = ''; error = $reason })
 }
 `

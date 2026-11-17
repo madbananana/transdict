@@ -4,10 +4,11 @@
 // here without a frontend edit — the page cannot offer what the code cannot do.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
-  Service, SettingsService, applyTheme, errMsg, isMac, langOption, onCommand, openSystemSettings, openURL, pickableLangs, prettyShortcut, rememberView, restoreView,
+  Service, SettingsService, applyTheme, errMsg, isMac, langOption, onCommand, onUpdateProgress, openSystemSettings, openURL, pickableLangs, prettyShortcut, rememberView, restoreView,
   type AnkiMapping, type Config, type Field, type Label, type Lang, type Provider, type ServiceType,
 } from './api'
 import type { Entry } from '../bindings/transdict/internal/history/models.js'
+import type { UpdateReport } from '../bindings/transdict/internal/gui/models.js'
 import { applyLocale, t, uiLocale } from './i18n'
 import { ConfirmButton } from './Confirm'
 import { ankiNote } from './copy'
@@ -86,6 +87,15 @@ export default function Settings({ onSaved, onPage }: {
   const [page, setPage] = useState<Page>(() =>
     restoreView(PAGE_KEY, pages.map((p) => p.id), 'general') as Page)
   const [status, setStatus] = useState('')
+
+  // The download reports through the event bus: UpdateProgress carries the byte
+  // count. Subscribing here rather than on the 通用 page keeps the line alive
+  // when the window was left on another tab while an update downloads.
+  useEffect(() => onUpdateProgress((p) => {
+    setStatus(p.percent > 0
+      ? t('正在下载更新… {n}%', { n: p.percent })
+      : t('正在下载更新…'))
+  }), [])
 
   useEffect(() => rememberView(PAGE_KEY, page), [page])
 
@@ -1321,6 +1331,8 @@ function General({ part, cfg, run, setStatus }: {
 }) {
   const [langs, setLangs] = useState<Lang[]>([])
   const [checking, setChecking] = useState(false)
+  const [installing, setInstalling] = useState(false)
+  const [update, setUpdate] = useState<UpdateReport | null>(null)
   const [version, setVersion] = useState('')
   const [hideWarn, setHideWarn] = useState(false)
   const [hideRefuse, setHideRefuse] = useState(false)
@@ -1352,11 +1364,29 @@ function General({ part, cfg, run, setStatus }: {
     setChecking(true)
     setStatus(t('检查更新…'))
     void Service.CheckUpdate()
-      .then((r) => setStatus(r?.version
-        ? t('发现新版本 {v}（当前 {c}）', { v: r.version, c: r.current })
-        : t('已是最新版本 {v}', { v: r?.current ?? '' })))
+      .then((r) => {
+        setUpdate(r?.version ? r : null)
+        setStatus(r?.version
+          ? t('发现新版本 {v}（当前 {c}）', { v: r.version, c: r.current })
+          : t('已是最新版本 {v}', { v: r?.current ?? '' }))
+      })
       .catch((e) => setStatus(errMsg(e)))
       .finally(() => setChecking(false))
+  }
+
+  // The download reports through the event bus; the top-level Settings page
+  // owns the status line, so the subscription lives there as well.
+  const installUpdate = () => {
+    setInstalling(true)
+    setStatus(t('正在下载更新…'))
+    void Service.InstallUpdate()
+      .then((message) => setStatus(message || t('已是最新版本 {v}', { v: version })))
+      .catch((e) => setStatus(errMsg(e)))
+      .finally(() => setInstalling(false))
+  }
+
+  const openUpdatePage = () => {
+    void Service.OpenUpdatePage().catch((e) => setStatus(errMsg(e)))
   }
 
   // 所选目录不可写 is EasyDict's warning under the folder picker: the notebook
@@ -1600,21 +1630,31 @@ function General({ part, cfg, run, setStatus }: {
       <div className="group">
         <h4>{t('启动与更新')}</h4>
         <ProviderField
-          field={{ key: 'updateURL', label: t('更新源地址'), secret: false, required: false }}
+          field={{ key: 'updateURL', label: t('更新源地址'), secret: false, required: false, placeholder: 'https://api.github.com/repos/madbananana/transdict/releases' }}
           value={cfg.updateURL ?? ''}
           run={run}
           icon="refresh"
           onSave={(v) => patch({ updateURL: v })}
         />
         <p className="noteline">{t('一个 JSON 文档，写明最新版本号与下载地址；GitHub 的 Releases API 直接可用。')}</p>
-        {toggle('autoUpdate', t('自动检查应用更新'), t('只在发现新版本时提示；地址留空即完全不联网。'))}
+        {toggle('autoUpdate', t('自动检查应用更新'), t('只在发现新版本时提示；地址留空时使用官方 GitHub 发布源。'))}
         {toggle('includeBeta', t('包括 Beta 版本'), t('抢先体验新功能，但可能不稳定'))}
         <div className="actionrow">
           <span className="byline">
             {version ? t('当前版本 {v}', { v: version }) : ''}
           </span>
           <div className="btnrow">
-            <button className="tiny" disabled={checking} onClick={checkUpdate}>
+            {update && (
+              <>
+                <button className="primary tiny" disabled={installing} onClick={installUpdate}>
+                  {t('下载并安装')}
+                </button>
+                <button className="tiny" disabled={installing} onClick={openUpdatePage}>
+                  {t('打开发布页')}
+                </button>
+              </>
+            )}
+            <button className="tiny" disabled={checking || installing} onClick={checkUpdate}>
               {t('立即检查')}
             </button>
           </div>
