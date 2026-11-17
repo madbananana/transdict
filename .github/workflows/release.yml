@@ -238,8 +238,16 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           fi
 
+      # generate_release_notes makes GitHub ignore a supplied body, so the two
+      # cases are separate steps instead of one call with both switches.
       - uses: softprops/action-gh-release@v2
+        if: steps.notes.outputs.body != ''
         with:
           files: release/*
           body: ${{ steps.notes.outputs.body }}
+
+      - uses: softprops/action-gh-release@v2
+        if: steps.notes.outputs.body == ''
+        with:
+          files: release/*
           generate_release_notes: true
