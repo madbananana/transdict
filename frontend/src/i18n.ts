@@ -307,6 +307,18 @@ const en: Record<string, string> = {
   '检查更新…': 'Checking for updates…',
   '发现新版本 {v}（当前 {c}）': 'Version {v} is available (you have {c})',
   '已是最新版本 {v}': 'This build is up to date ({v})',
+  // 软件更新: the release notes and the download in one window.
+  '软件更新': 'Software Update',
+  '新版本 {v}': 'Version {v}',
+  '更新内容': 'What’s New',
+  '本次发布没有写明更新内容。': 'This release does not include any notes.',
+  '查看更新': 'View Update',
+  '立即更新': 'Update Now',
+  '稍后': 'Later',
+  '正在安装新版本…': 'Installing the new version…',
+  '安装完成后会自动重新打开 Transdict。':
+    'Transdict will reopen automatically when the installation finishes.',
+  '取消下载': 'Cancel Download',
   '未设置更新源': 'No update source is set',
   '更新源需要是一个 http(s) 地址': 'The update source must be an http(s) address',
   '自动复制第一个翻译结果': 'Copy the first translation automatically',

@@ -7,11 +7,12 @@ import OcrWindow from './OcrWindow'
 import Panel from './Panel'
 import QueryIcon from './QueryIcon'
 import SettingsWindow from './SettingsWindow'
+import UpdateWindow from './UpdateWindow'
 import { useEffect } from 'react'
 import { SettingsService, applyTheme } from './api'
 import { applyLocale } from './i18n'
 
-export type View = 'panel' | 'queryicon' | 'capture' | 'settings' | 'ocr' | 'logs'
+export type View = 'panel' | 'queryicon' | 'capture' | 'settings' | 'ocr' | 'logs' | 'update'
 
 export function hashRoute(): { view: View; frame: number } {
   const parts = window.location.hash.replace(/^#\/?/, '').split('/')
@@ -26,6 +27,8 @@ export function hashRoute(): { view: View; frame: number } {
       return { view: 'ocr', frame: 0 }
     case 'logs':
       return { view: 'logs', frame: 0 }
+    case 'update':
+      return { view: 'update', frame: 0 }
   }
   return { view: 'panel', frame: 0 }
 }
@@ -51,5 +54,6 @@ export default function App() {
   if (route.view === 'settings') return <SettingsWindow />
   if (route.view === 'ocr') return <OcrWindow />
   if (route.view === 'logs') return <LogsWindow />
+  if (route.view === 'update') return <UpdateWindow />
   return <Panel />
 }

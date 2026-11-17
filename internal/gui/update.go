@@ -25,8 +25,19 @@ const checkBudget = 15 * time.Second
 // whole transfer is bounded here rather than by the per-service timeout.
 const downloadBudget = 30 * time.Minute
 
-// notesLimit is what an alert can show before the panel stops being readable.
-const notesLimit = 400
+// notesLimit is what the update window will carry. A release body written by a
+// human fits; a pasted commit log of a thousand commits is not a changelog and
+// is not worth sending through an event on every progress tick.
+const notesLimit = 20000
+
+// The update window's states. It draws a progress bar while downloading, a
+// finished bar while the installer runs, and the retry button after an error.
+const (
+	updateIdle        = "idle"
+	updateDownloading = "downloading"
+	updateInstalling  = "installing"
+	updateError       = "error"
+)
 
 // UpdateReport answers 检查更新: the running build, and what to install when the
 // source is ahead of it. An empty Version means the build is current, which is a
@@ -40,12 +51,29 @@ type UpdateReport struct {
 
 func (r UpdateReport) Newer() bool { return r.Version != "" }
 
-// UpdateProgress is one download step. Percent is zero when the server did not
-// advertise a length.
-type UpdateProgress struct {
-	Percent  int   `json:"percent"`
-	Received int64 `json:"received"`
-	Total    int64 `json:"total"`
+// UpdateInfo is the whole state of the update window, emitted on every change
+// and polled once when the window mounts. The window never has to join two
+// events to know whether a download is still running.
+type UpdateInfo struct {
+	Current  string `json:"current"`
+	Version  string `json:"version"`
+	URL      string `json:"url"`
+	Notes    string `json:"notes"`
+	State    string `json:"state"`
+	Percent  int    `json:"percent"`
+	Received int64  `json:"received"`
+	Total    int64  `json:"total"`
+	Message  string `json:"message"`
+}
+
+// updateNotice is the release rememberRelease keeps for the window. The whole
+// release travels with it because the download needs its asset list, not just
+// the version and notes the window draws.
+type updateNotice struct {
+	version string
+	url     string
+	notes   string
+	release *update.Release
 }
 
 // updateSource resolves 更新源地址: an empty field means the official release
@@ -59,10 +87,19 @@ func updateSource(raw string) string {
 }
 
 // CheckUpdate is the button on the settings page. It answers whatever the source
-// says, including 没有更新.
+// says, including 没有更新, and remembers a newer release for the update window.
 func (s *Service) CheckUpdate() (UpdateReport, error) {
 	cfg := s.cfg.Get()
-	return s.updateReport(updateSource(cfg.UpdateURL), cfg.IncludeBeta)
+	report, rel, err := s.fetchReport(updateSource(cfg.UpdateURL), cfg.IncludeBeta)
+	if err != nil {
+		return UpdateReport{}, err
+	}
+	if rel != nil {
+		s.noteRelease(rel)
+	} else {
+		s.forgetRelease()
+	}
+	return report, nil
 }
 
 // CheckUpdateNow is the menu bar item. A manual check that stays silent is
@@ -85,82 +122,193 @@ func (s *Service) AutoCheck() {
 	s.checkUpdate(false)
 }
 
-// InstallUpdate is 下载并安装 on the settings page. It fetches the release
-// again, downloads the one asset this OS installs, and hands it over. Windows
-// replaces the executable in place and macOS swaps the app bundle, so both
-// answer first and quit a moment later; Linux gives the package to the desktop.
-func (s *Service) InstallUpdate() (string, error) {
+// UpdateInfo answers the update window. It is also emitted as
+// EventUpdateChanged after every change.
+func (s *Service) UpdateInfo() UpdateInfo {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
+	return s.updateInfoLocked()
+}
+
+// OpenUpdateWindow raises the window that shows the remembered release. The
+// settings page calls it after its own check found something newer.
+func (s *Service) OpenUpdateWindow() {
+	s.updateMu.Lock()
+	known := s.notice != nil
+	s.updateMu.Unlock()
+	if !known {
+		return
+	}
+	s.show(WindowUpdate, true)
+}
+
+// HideUpdate is 稍后 and the window's close button: the notice survives, so the
+// next periodic check can raise it again without another download.
+func (s *Service) HideUpdate() {
+	if w := s.window(WindowUpdate); w != nil {
+		w.Hide()
+	}
+}
+
+// SkipUpdate is 忽略此版本: the version is written where the automatic check
+// reads it, and the window goes away. A manual check still reports it, so the
+// choice can be changed.
+func (s *Service) SkipUpdate() {
+	s.updateMu.Lock()
+	version := ""
+	if s.notice != nil {
+		version = s.notice.version
+	}
+	s.updateMu.Unlock()
+	if version != "" {
+		s.skipVersion(version)
+	}
+	s.HideUpdate()
+}
+
+// CancelUpdate stops a download in progress. The partial file is removed by
+// Download; the window returns to its 立即更新 state with a short notice.
+func (s *Service) CancelUpdate() {
+	s.updateMu.Lock()
+	cancel := s.cancelUpdate
+	s.updateMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// StartUpdate downloads and installs the remembered release, or fetches the
+// newest one first when the window was opened without a check. It answers as
+// soon as the download starts; the window follows EventUpdateChanged.
+func (s *Service) StartUpdate() error {
 	s.updateMu.Lock()
 	if s.updating {
 		s.updateMu.Unlock()
-		return "", errors.New("更新正在下载，请稍候")
+		return errors.New("更新正在下载，请稍候")
+	}
+	notice := s.notice
+	s.updateMu.Unlock()
+
+	if notice == nil {
+		cfg := s.cfg.Get()
+		rel, err := s.latest(updateSource(cfg.UpdateURL), cfg.IncludeBeta, checkBudget)
+		if err != nil {
+			return err
+		}
+		if rel == nil {
+			return errors.New("已是最新版本")
+		}
+		s.noteRelease(rel)
+		s.updateMu.Lock()
+		notice = s.notice
+		s.updateMu.Unlock()
+	}
+	if notice == nil {
+		return errors.New("没有可安装的版本")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), downloadBudget)
+	s.updateMu.Lock()
+	if s.updating {
+		s.updateMu.Unlock()
+		cancel()
+		return errors.New("更新正在下载，请稍候")
 	}
 	s.updating = true
+	s.updateState = updateDownloading
+	s.updateErr = ""
+	s.updateDone, s.updateTotal = 0, 0
+	s.cancelUpdate = cancel
 	s.updateMu.Unlock()
+
+	s.emitUpdate()
+	s.show(WindowUpdate, true)
+	go s.downloadAndInstall(ctx, cancel, notice)
+	return nil
+}
+
+// downloadAndInstall waits for nothing but the bytes: the installer cannot
+// replace an executable that is still running, so update.Launch hands the file
+// to a helper that waits for this process to exit.
+func (s *Service) downloadAndInstall(ctx context.Context, cancel context.CancelFunc, notice *updateNotice) {
+	defer cancel()
 	defer func() {
 		s.updateMu.Lock()
 		s.updating = false
+		s.cancelUpdate = nil
 		s.updateMu.Unlock()
 	}()
 
-	cfg := s.cfg.Get()
-	rel, err := s.latest(updateSource(cfg.UpdateURL), cfg.IncludeBeta, checkBudget)
-	if err != nil {
-		log.Printf("transdict: 检查更新失败: %v", err)
-		return "", err
-	}
-	if rel == nil {
-		return "", errors.New("已是最新版本")
-	}
-	asset := update.ChooseAsset(rel, runtime.GOOS, runtime.GOARCH)
+	asset := update.ChooseAsset(notice.release, runtime.GOOS, runtime.GOARCH)
 	if asset == nil {
-		log.Printf("transdict: 发布 %s 中没有 %s/%s 的安装包", rel.Version, runtime.GOOS, runtime.GOARCH)
-		return "", errors.New("发布中没有适用于当前系统的安装包")
+		log.Printf("transdict: 发布 %s 中没有 %s/%s 的安装包", notice.version, runtime.GOOS, runtime.GOARCH)
+		s.setUpdateState(updateError, l10n.T("发布中没有适用于当前系统的安装包"))
+		return
 	}
 	dir, err := update.SaveDir()
 	if err != nil {
-		return "", err
+		s.setUpdateState(updateError, err.Error())
+		return
 	}
 	path := filepath.Join(dir, filepath.Base(asset.Name))
-	log.Printf("transdict: 下载 %s 到 %s", rel.Version, path)
+	log.Printf("transdict: 下载 %s 到 %s", notice.version, path)
 
-	ctx, cancel := context.WithTimeout(context.Background(), downloadBudget)
-	defer cancel()
 	err = update.Download(ctx, *asset, path, func(done, total int64) {
-		progress := UpdateProgress{Received: done, Total: total}
-		if total > 0 {
-			progress.Percent = int(done * 100 / total)
-		}
-		s.wails.Event.Emit(EventUpdateProgress, progress)
+		s.updateMu.Lock()
+		s.updateDone, s.updateTotal = done, total
+		s.updateMu.Unlock()
+		s.emitUpdate()
 	})
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.Printf("transdict: 更新下载已取消")
+			s.setUpdateState(updateIdle, l10n.T("已取消下载"))
+			return
+		}
 		log.Printf("transdict: 下载更新失败: %v", err)
-		return "", err
+		s.setUpdateState(updateError, err.Error())
+		return
 	}
+
+	s.setUpdateState(updateInstalling, "")
 	quit, message, err := update.Launch(path)
 	if err != nil {
 		log.Printf("transdict: 启动更新程序失败: %v", err)
-		return "", err
+		s.setUpdateState(updateError, err.Error())
+		return
 	}
 	log.Printf("transdict: 更新程序已启动（%s）", message)
 	// The installed build is now at least as new as the version that was
 	// skipped, so that note in the settings page is stale.
 	s.clearSkipped()
-	if quit {
-		// The JS call has to answer before the window disappears; three seconds
-		// is enough for the status line to paint and for the installer to show
-		// its first page.
-		go func() {
-			time.Sleep(3 * time.Second)
-			s.wails.Quit()
-		}()
+	if !quit {
+		// Linux hands the package to the desktop and macOS falls back to the
+		// mounted image when it cannot swap the bundle; both stay open, so the
+		// window has to say what happened instead of waiting forever.
+		s.setUpdateState(updateIdle, l10n.T(message))
+		return
 	}
-	return l10n.T(message), nil
+	// The JS call has to answer before the window disappears; three seconds
+	// is enough for the status line to paint and for the installer to show
+	// its first page.
+	go func() {
+		time.Sleep(3 * time.Second)
+		s.wails.Quit()
+	}()
 }
 
 // OpenUpdatePage opens the release page of the newest published build. It goes
-// through the same source as 检查更新 so a custom feed keeps working.
+// through the same source as 检查更新 so a custom feed keeps working, and uses
+// the remembered release when there is one.
 func (s *Service) OpenUpdatePage() error {
+	s.updateMu.Lock()
+	if s.notice != nil && s.notice.url != "" {
+		url := s.notice.url
+		s.updateMu.Unlock()
+		return s.wails.Browser.OpenURL(url)
+	}
+	s.updateMu.Unlock()
+
 	cfg := s.cfg.Get()
 	rel, err := s.latest(updateSource(cfg.UpdateURL), cfg.IncludeBeta, checkBudget)
 	if err != nil {
@@ -172,18 +320,23 @@ func (s *Service) OpenUpdatePage() error {
 	return s.wails.Browser.OpenURL(rel.URL)
 }
 
-func (s *Service) updateReport(source string, includeBeta bool) (UpdateReport, error) {
+// fetchReport is the one network answer each check turns into a report and,
+// when there is something newer, a remembered release.
+func (s *Service) fetchReport(source string, includeBeta bool) (UpdateReport, *update.Release, error) {
 	rel, err := s.latest(source, includeBeta, checkBudget)
 	if err != nil {
-		return UpdateReport{}, err
+		return UpdateReport{}, nil, err
 	}
 	report := UpdateReport{Current: s.version}
-	if rel != nil {
-		report.Version = rel.Version
-		report.URL = rel.URL
-		report.Notes = shorten(rel.Notes)
+	if rel == nil {
+		return report, nil, nil
 	}
-	return report, nil
+	return UpdateReport{
+		Current: s.version,
+		Version: rel.Version,
+		URL:     rel.URL,
+		Notes:   clipNotes(rel.Notes),
+	}, rel, nil
 }
 
 func (s *Service) latest(source string, includeBeta bool, budget time.Duration) (*update.Release, error) {
@@ -192,10 +345,87 @@ func (s *Service) latest(source string, includeBeta bool, budget time.Duration) 
 	return update.Check(ctx, source, s.version, includeBeta)
 }
 
+// noteRelease makes rel the release the update window draws. An in-flight
+// download keeps its own state: a periodic check must not reset the bar it is
+// filling.
+func (s *Service) noteRelease(rel *update.Release) {
+	s.updateMu.Lock()
+	if s.updating {
+		s.updateMu.Unlock()
+		return
+	}
+	s.notice = &updateNotice{
+		version: rel.Version,
+		url:     rel.URL,
+		notes:   clipNotes(rel.Notes),
+		release: rel,
+	}
+	s.updateState = updateIdle
+	s.updateErr = ""
+	s.updateDone, s.updateTotal = 0, 0
+	s.updateMu.Unlock()
+	s.emitUpdate()
+}
+
+// forgetRelease drops a notice the source no longer reports, so a stale window
+// cannot offer a version that has been withdrawn.
+func (s *Service) forgetRelease() {
+	s.updateMu.Lock()
+	if s.updating || s.notice == nil {
+		s.updateMu.Unlock()
+		return
+	}
+	s.notice = nil
+	s.updateState = updateIdle
+	s.updateErr = ""
+	s.updateDone, s.updateTotal = 0, 0
+	s.updateMu.Unlock()
+	s.emitUpdate()
+}
+
+func (s *Service) updateInfoLocked() UpdateInfo {
+	info := UpdateInfo{
+		Current:  s.version,
+		State:    s.updateState,
+		Message:  s.updateErr,
+		Received: s.updateDone,
+		Total:    s.updateTotal,
+	}
+	if info.State == "" {
+		info.State = updateIdle
+	}
+	if s.notice != nil {
+		info.Version = s.notice.version
+		info.URL = s.notice.url
+		info.Notes = s.notice.notes
+	}
+	if info.Total > 0 {
+		info.Percent = int(info.Received * 100 / info.Total)
+		if info.Percent > 100 {
+			info.Percent = 100
+		}
+	}
+	return info
+}
+
+func (s *Service) setUpdateState(state, message string) {
+	s.updateMu.Lock()
+	s.updateState = state
+	s.updateErr = message
+	s.updateMu.Unlock()
+	s.emitUpdate()
+}
+
+// emitUpdate publishes a snapshot outside the lock: UpdateInfo takes it again,
+// and an event handler that calls back into the service must not deadlock.
+func (s *Service) emitUpdate() {
+	s.wails.Event.Emit(EventUpdateChanged, s.UpdateInfo())
+}
+
 func (s *Service) checkUpdate(manual bool) {
 	title := l10n.T("检查更新")
 	cfg := s.cfg.Get()
-	report, err := s.updateReport(updateSource(cfg.UpdateURL), cfg.IncludeBeta)
+	report, rel, err := s.fetchReport(updateSource(cfg.UpdateURL), cfg.IncludeBeta)
 	if err != nil {
 		// A silent failure is right at launch and wrong when the user asked.
 		log.Printf("transdict: 检查更新失败: %v", err)
@@ -204,7 +434,8 @@ func (s *Service) checkUpdate(manual bool) {
 		}
 		return
 	}
-	if !report.Newer() {
+	if rel == nil {
+		s.forgetRelease()
 		s.clearSkipped()
 		if manual {
 			s.inform(title, l10n.T("已是最新版本")+"："+report.Current)
@@ -218,32 +449,8 @@ func (s *Service) checkUpdate(manual bool) {
 		return
 	}
 	log.Printf("transdict: 发现新版本 %s（当前 %s，手动 %v）", report.Version, report.Current, manual)
-	s.promptUpdate(report)
-}
-
-// promptUpdate is the three-way answer to a discovered release: install now,
-// later, or never for this version. The skip is stored by version, so the next
-// release asks again.
-func (s *Service) promptUpdate(report UpdateReport) {
-	title := l10n.T("发现新版本")
-	body := l10n.T("发现新版本") + " " + report.Version + "（" + l10n.T("当前") + " " + report.Current + "）"
-	if report.Notes != "" {
-		body += "\n\n" + report.Notes
-	}
-	dialog := s.wails.Dialog.Info().SetTitle(title).SetMessage(body)
-	dialog.AddButton(l10n.T("立即更新")).OnClick(func() { go s.installFromPrompt() })
-	dialog.AddButton(l10n.T("稍后"))
-	dialog.AddButton(l10n.T("忽略此版本")).OnClick(func() { s.skipVersion(report.Version) })
-	dialog.Show()
-}
-
-// installFromPrompt runs the same download the settings page starts. The
-// progress events only reach a window that is listening, so a failure has to be
-// reported here; success on Windows and macOS ends with the app restarting.
-func (s *Service) installFromPrompt() {
-	if _, err := s.InstallUpdate(); err != nil {
-		s.inform(l10n.T("更新失败"), err.Error())
-	}
+	s.noteRelease(rel)
+	s.show(WindowUpdate, true)
 }
 
 func (s *Service) skipVersion(version string) {
@@ -268,9 +475,9 @@ func (s *Service) inform(title, body string) {
 	dialog.Show()
 }
 
-// shorten keeps a changelog inside an alert. Release notes written by a human
-// fit; a pasted commit log does not, and the panel is not where it gets read.
-func shorten(text string) string {
+// clipNotes keeps a release body inside the window. The whole body scrolls
+// there, so the cut is only a guard against a pathological payload.
+func clipNotes(text string) string {
 	r := []rune(text)
 	if len(r) <= notesLimit {
 		return text

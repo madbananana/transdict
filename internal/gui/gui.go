@@ -41,9 +41,11 @@ const (
 	// app rather than to a webview, so Go picks the query window that holds the
 	// keyboard and tells that one window which action to run.
 	EventMenuAction = "app:menu-action"
-	// EventUpdateProgress reports an in-app update download. It is addressed to
-	// the settings page, the only place that starts one.
-	EventUpdateProgress = "app:update-progress"
+	// EventUpdateChanged carries the whole state of the update window: the
+	// release it shows, the notes, and the download byte count. One event keeps
+	// the window and the settings status line from disagreeing about a download
+	// they both follow.
+	EventUpdateChanged = "app:update-changed"
 )
 
 // MenuAction names one 快捷键 menu item and the window it belongs to. The menu
@@ -69,6 +71,7 @@ const (
 	WindowSettings = "settings"
 	WindowOCR      = "ocr"
 	WindowLogs     = "logs"
+	WindowUpdate   = "update"
 )
 
 type Service struct {
@@ -84,6 +87,14 @@ type Service struct {
 	// from downloading the same release at once.
 	updateMu sync.Mutex
 	updating bool
+	// notice is the release the update window presents; the download state
+	// beside it belongs to that release. All of it is guarded by updateMu.
+	notice       *updateNotice
+	updateState  string
+	updateErr    string
+	updateDone   int64
+	updateTotal  int64
+	cancelUpdate context.CancelFunc
 
 	mu       sync.Mutex
 	session  string

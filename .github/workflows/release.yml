@@ -212,12 +212,31 @@ jobs:
     needs: [macos, windows, linux]
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v4
         with:
           path: release
           merge-multiple: true
 
+      # An annotated tag's message is the release body the update window shows.
+      # A lightweight tag has no message, and generate_release_notes fills in.
+      - name: Read the annotated tag message
+        id: notes
+        run: |
+          body=$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")
+          if [ -n "$body" ]; then
+            {
+              echo 'body<<EOF'
+              echo "$body"
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: softprops/action-gh-release@v2
         with:
           files: release/*
+          body: ${{ steps.notes.outputs.body }}
           generate_release_notes: true

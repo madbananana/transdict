@@ -4,7 +4,7 @@
 // here without a frontend edit — the page cannot offer what the code cannot do.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
-  Service, SettingsService, applyTheme, errMsg, isMac, langOption, onCommand, onUpdateProgress, openSystemSettings, openURL, pickableLangs, prettyShortcut, rememberView, restoreView,
+  Service, SettingsService, applyTheme, errMsg, isMac, langOption, onCommand, onUpdateChanged, openSystemSettings, openURL, pickableLangs, prettyShortcut, rememberView, restoreView,
   type AnkiMapping, type Config, type Field, type Label, type Lang, type Provider, type ServiceType,
 } from './api'
 import type { Entry } from '../bindings/transdict/internal/history/models.js'
@@ -88,13 +88,20 @@ export default function Settings({ onSaved, onPage }: {
     restoreView(PAGE_KEY, pages.map((p) => p.id), 'general') as Page)
   const [status, setStatus] = useState('')
 
-  // The download reports through the event bus: UpdateProgress carries the byte
-  // count. Subscribing here rather than on the 通用 page keeps the line alive
-  // when the window was left on another tab while an update downloads.
-  useEffect(() => onUpdateProgress((p) => {
-    setStatus(p.percent > 0
-      ? t('正在下载更新… {n}%', { n: p.percent })
-      : t('正在下载更新…'))
+  // The download reports through the event bus, and the settings status line
+  // follows it even while another tab is open: the window that shows the bar is
+  // the update window, but a download started there should not make this page
+  // look idle.
+  useEffect(() => onUpdateChanged((i) => {
+    if (i.state === 'downloading') {
+      setStatus(i.percent > 0
+        ? t('正在下载更新… {n}%', { n: i.percent })
+        : t('正在下载更新…'))
+    } else if (i.state === 'installing') {
+      setStatus(t('正在安装新版本…'))
+    } else if (i.state === 'error' && i.message) {
+      setStatus(i.message)
+    }
   }), [])
 
   useEffect(() => rememberView(PAGE_KEY, page), [page])
@@ -1331,7 +1338,6 @@ function General({ part, cfg, run, setStatus }: {
 }) {
   const [langs, setLangs] = useState<Lang[]>([])
   const [checking, setChecking] = useState(false)
-  const [installing, setInstalling] = useState(false)
   const [update, setUpdate] = useState<UpdateReport | null>(null)
   const [version, setVersion] = useState('')
   const [hideWarn, setHideWarn] = useState(false)
@@ -1359,7 +1365,8 @@ function General({ part, cfg, run, setStatus }: {
     })
 
   // A check writes nothing, so it goes around run: the answer belongs in the
-  // status line and a config reload would only clear it.
+  // status line and a config reload would only clear it. A newer release also
+  // raises the update window, which is where its notes and download live.
   const checkUpdate = () => {
     setChecking(true)
     setStatus(t('检查更新…'))
@@ -1369,21 +1376,13 @@ function General({ part, cfg, run, setStatus }: {
         setStatus(r?.version
           ? t('发现新版本 {v}（当前 {c}）', { v: r.version, c: r.current })
           : t('已是最新版本 {v}', { v: r?.current ?? '' }))
+        if (r?.version) void Service.OpenUpdateWindow()
       })
       .catch((e) => setStatus(errMsg(e)))
       .finally(() => setChecking(false))
   }
 
-  // The download reports through the event bus; the top-level Settings page
-  // owns the status line, so the subscription lives there as well.
-  const installUpdate = () => {
-    setInstalling(true)
-    setStatus(t('正在下载更新…'))
-    void Service.InstallUpdate()
-      .then((message) => setStatus(message || t('已是最新版本 {v}', { v: version })))
-      .catch((e) => setStatus(errMsg(e)))
-      .finally(() => setInstalling(false))
-  }
+  const openUpdate = () => void Service.OpenUpdateWindow()
 
   const openUpdatePage = () => {
     void Service.OpenUpdatePage().catch((e) => setStatus(errMsg(e)))
@@ -1660,18 +1659,18 @@ function General({ part, cfg, run, setStatus }: {
           <div className="btnrow">
             {update && (
               <>
-                <button className="primary tiny" disabled={installing} onClick={installUpdate}>
-                  {t('下载并安装')}
+                <button className="primary tiny" onClick={openUpdate}>
+                  {t('查看更新')}
                 </button>
-                <button className="tiny" disabled={installing} onClick={openUpdatePage}>
+                <button className="tiny" onClick={openUpdatePage}>
                   {t('打开发布页')}
                 </button>
-                <button className="tiny" disabled={installing} onClick={ignoreUpdate}>
+                <button className="tiny" onClick={ignoreUpdate}>
                   {t('忽略此版本')}
                 </button>
               </>
             )}
-            <button className="tiny" disabled={checking || installing} onClick={checkUpdate}>
+            <button className="tiny" disabled={checking} onClick={checkUpdate}>
               {t('立即检查')}
             </button>
           </div>

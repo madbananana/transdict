@@ -252,6 +252,8 @@ func ocrWindowTitle() string { return l10n.T("OCR 预览") }
 
 func logsWindowTitle() string { return l10n.T("调试日志") }
 
+func updateWindowTitle() string { return l10n.T("软件更新") }
+
 // EasyDict's preferences window is one fixed width with a tab bar across the
 // top. The height is fixed too: switching tabs must not make the window jump,
 // even though 关于 and 隐私 are shorter forms than 高级.
@@ -351,6 +353,35 @@ func NewLogsWindow(app *application.App, cfg *settings.Store) application.Window
 		},
 		BackgroundColour: application.NewRGB(10, 12, 18),
 		URL:              "/#/logs",
+		Frameless:        ownChrome(),
+	}
+	w := app.Window.NewWithOptions(opts)
+	w.Center()
+	return w
+}
+
+// NewUpdateWindow is 软件更新: the release the check found, its notes, and the
+// download as it happens. It is its own window because the installer is tens of
+// megabytes and the settings page is a form, not a progress surface.
+func NewUpdateWindow(app *application.App, cfg *settings.Store) application.Window {
+	opts := application.WebviewWindowOptions{
+		Name:      WindowUpdate,
+		Title:     updateWindowTitle(),
+		Width:     560,
+		Height:    640,
+		MinWidth:  480,
+		MinHeight: 420,
+		Mac: application.MacWindow{
+			InvisibleTitleBarHeight: 34,
+			TitleBar:                application.MacTitleBarHidden,
+			Backdrop:                application.MacBackdropTranslucent,
+		},
+		Windows: application.WindowsWindow{
+			HiddenOnTaskbar:            !cfg.Get().ShowInDock,
+			WebView2CompositionHosting: ownChrome(),
+		},
+		BackgroundColour: application.NewRGB(10, 12, 18),
+		URL:              "/#/update",
 		Frameless:        ownChrome(),
 	}
 	w := app.Window.NewWithOptions(opts)
@@ -460,6 +491,11 @@ func (s *Service) show(name string, lift bool) {
 		// first-mouse patch is re-applied each time the button comes up.
 		acceptFirstMouseInViews()
 	}
+	if name == WindowUpdate {
+		// An update notice that opens behind another app is a notice nobody
+		// reads; the ordering completes a turn later, as present() does.
+		application.InvokeAsync(dock.Activate)
+	}
 	switch name {
 	case WindowMain, WindowSettings:
 		// The percentage rides on the window itself, so a window rebuilt after a
@@ -496,6 +532,8 @@ func (s *Service) windowFor(name string) application.Window {
 		return w
 	case WindowLogs:
 		return NewLogsWindow(s.wails, s.cfg)
+	case WindowUpdate:
+		return NewUpdateWindow(s.wails, s.cfg)
 	case WindowIcon:
 		return s.ensure(WindowIcon, "/#/queryicon", queryIconSize, queryIconSize, true)
 	}
@@ -524,6 +562,9 @@ func (s *Service) SyncWindowTitles() {
 	}
 	if w := s.window(WindowLogs); w != nil {
 		w.SetTitle(logsWindowTitle())
+	}
+	if w := s.window(WindowUpdate); w != nil {
+		w.SetTitle(updateWindowTitle())
 	}
 }
 

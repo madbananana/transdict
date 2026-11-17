@@ -10,7 +10,7 @@ import { speechKey, stopsPlayback } from './speech'
 import { Service, SettingsService } from '../bindings/transdict/internal/gui/index.js'
 import { AppCommand, AppTheme, AppUiLang, QueryBusy, QueryResult } from '../bindings/events/index.js'
 
-import type { Busy } from '../bindings/transdict/internal/gui/models.js'
+import type { Busy, UpdateInfo } from '../bindings/transdict/internal/gui/models.js'
 import type { Response } from '../bindings/transdict/internal/query/models.js'
 import type { AnkiMapping, Config, Field, Label, Provider, ServiceType } from '../bindings/transdict/internal/settings/models.js'
 import type { Entry, Result as DictResult } from '../bindings/transdict/internal/dict/models.js'
@@ -21,7 +21,7 @@ import type { Lang } from '../bindings/transdict/internal/langs/models.js'
 export { Service, SettingsService }
 export type {
   AnkiMapping, Busy, Config, DictResult, Entry, Field, Label, Lang, OCROutcome, Provider, Response,
-  ServiceType, TranslateResult,
+  ServiceType, TranslateResult, UpdateInfo,
 }
 
 // A language change rewrites Go's side of the text and the bundle reads its own
@@ -105,16 +105,11 @@ export function onConfig(fn: () => void): () => void {
   return Events.On('app:config', () => fn())
 }
 
-/** UpdateProgress is one download step, emitted while 下载并安装 streams the
- * installer. Percent is zero when the server did not advertise a length. */
-export interface UpdateProgress {
-  percent: number
-  received: number
-  total: number
-}
-
-export function onUpdateProgress(fn: (p: UpdateProgress) => void): () => void {
-  return Events.On('app:update-progress', (ev: { data: UpdateProgress }) => {
+/** onUpdateChanged reports the whole state of the update window: the release,
+ * its notes and the download's byte count. One event keeps the window and the
+ * settings status line from disagreeing about a download they both follow. */
+export function onUpdateChanged(fn: (i: UpdateInfo) => void): () => void {
+  return Events.On('app:update-changed', (ev: { data: UpdateInfo }) => {
     if (ev.data) fn(ev.data)
   })
 }

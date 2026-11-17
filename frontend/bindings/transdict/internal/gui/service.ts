@@ -93,6 +93,14 @@ export function Cancel(): $CancellablePromise<void> {
 }
 
 /**
+ * CancelUpdate stops a download in progress. The partial file is removed by
+ * Download; the window returns to its 立即更新 state with a short notice.
+ */
+export function CancelUpdate(): $CancellablePromise<void> {
+    return $Call.ByID(223247427);
+}
+
+/**
  * CaptureReady is the overlay reporting that its frozen frame has decoded and
  * the window is ready to be seen. Showing only now means the first frame on
  * screen is the screenshot, not the webview's white backdrop. The marquee has
@@ -114,7 +122,7 @@ export function CatchSelection(): $CancellablePromise<void> {
 
 /**
  * CheckUpdate is the button on the settings page. It answers whatever the source
- * says, including 没有更新.
+ * says, including 没有更新, and remembers a newer release for the update window.
  */
 export function CheckUpdate(): $CancellablePromise<$models.UpdateReport> {
     return $Call.ByID(376807305);
@@ -258,6 +266,14 @@ export function FrameDataURL(frameIndex: number): $CancellablePromise<string> {
 }
 
 /**
+ * HideUpdate is 稍后 and the window's close button: the notice survives, so the
+ * next periodic check can raise it again without another download.
+ */
+export function HideUpdate(): $CancellablePromise<void> {
+    return $Call.ByID(2843473201);
+}
+
+/**
  * History returns the newest matching entries.
  */
 export function History(needle: string, favoritesOnly: boolean, service: string, limit: number): $CancellablePromise<history$0.Entry[] | null> {
@@ -288,16 +304,6 @@ export function IconQuery(): $CancellablePromise<void> {
  */
 export function ImportConfigFile(): $CancellablePromise<string> {
     return $Call.ByID(350967953);
-}
-
-/**
- * InstallUpdate is 下载并安装 on the settings page. It fetches the release
- * again, downloads the one asset this OS installs, and hands it over. Windows
- * replaces the executable in place and macOS swaps the app bundle, so both
- * answer first and quit a moment later; Linux gives the package to the desktop.
- */
-export function InstallUpdate(): $CancellablePromise<string> {
-    return $Call.ByID(1817311122);
 }
 
 /**
@@ -470,10 +476,19 @@ export function OpenSettings(): $CancellablePromise<void> {
 
 /**
  * OpenUpdatePage opens the release page of the newest published build. It goes
- * through the same source as 检查更新 so a custom feed keeps working.
+ * through the same source as 检查更新 so a custom feed keeps working, and uses
+ * the remembered release when there is one.
  */
 export function OpenUpdatePage(): $CancellablePromise<void> {
     return $Call.ByID(1763638234);
+}
+
+/**
+ * OpenUpdateWindow raises the window that shows the remembered release. The
+ * settings page calls it after its own check found something newer.
+ */
+export function OpenUpdateWindow(): $CancellablePromise<void> {
+    return $Call.ByID(978658345);
 }
 
 /**
@@ -664,6 +679,15 @@ export function ShortcutProblems(): $CancellablePromise<shortcut$0.Problem[] | n
 }
 
 /**
+ * SkipUpdate is 忽略此版本: the version is written where the automatic check
+ * reads it, and the window goes away. A manual check still reports it, so the
+ * choice can be changed.
+ */
+export function SkipUpdate(): $CancellablePromise<void> {
+    return $Call.ByID(2429493622);
+}
+
+/**
  * Speak returns audio for a passage. Playable folds a provider's bytes into a
  * data: URL, because the bridge carries only Clip.URL.
  */
@@ -704,6 +728,15 @@ export function StartOCR(): $CancellablePromise<void> {
  */
 export function StartSilent(): $CancellablePromise<void> {
     return $Call.ByID(3599081909);
+}
+
+/**
+ * StartUpdate downloads and installs the remembered release, or fetches the
+ * newest one first when the window was opened without a check. It answers as
+ * soon as the download starts; the window follows EventUpdateChanged.
+ */
+export function StartUpdate(): $CancellablePromise<void> {
+    return $Call.ByID(1130544365);
 }
 
 /**
@@ -749,6 +782,14 @@ export function TogglePin(): $CancellablePromise<boolean> {
  */
 export function TransformText(text: string, action: string): $CancellablePromise<string> {
     return $Call.ByID(3605742843, text, action);
+}
+
+/**
+ * UpdateInfo answers the update window. It is also emitted as
+ * EventUpdateChanged after every change.
+ */
+export function UpdateInfo(): $CancellablePromise<$models.UpdateInfo> {
+    return $Call.ByID(171597321);
 }
 
 /**

@@ -61,6 +61,23 @@ export interface ServiceHelp {
 }
 
 /**
+ * UpdateInfo is the whole state of the update window, emitted on every change
+ * and polled once when the window mounts. The window never has to join two
+ * events to know whether a download is still running.
+ */
+export interface UpdateInfo {
+    "current": string;
+    "version": string;
+    "url": string;
+    "notes": string;
+    "state": string;
+    "percent": number;
+    "received": number;
+    "total": number;
+    "message": string;
+}
+
+/**
  * UpdateReport answers 检查更新: the running build, and what to install when the
  * source is ahead of it. An empty Version means the build is current, which is a
  * result rather than a failure.

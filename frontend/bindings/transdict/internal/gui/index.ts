@@ -14,5 +14,6 @@ export type {
     OCRPreview,
     PermissionState,
     ServiceHelp,
+    UpdateInfo,
     UpdateReport
 } from "./models.js";
