@@ -445,6 +445,7 @@ var en = map[string]string{
 	"Windows OCR：无法创建临时目录：%w": "Windows OCR: cannot create a temporary folder: %w",
 	"Windows OCR：无法写入临时图片：%w": "Windows OCR: cannot write the temporary picture: %w",
 	"Windows OCR：无法写入识别脚本：%w": "Windows OCR: cannot write the recognition script: %w",
+	"Windows OCR：无法放大识别图片：%w": "Windows OCR: cannot enlarge the picture: %w",
 	"无法初始化 WinRT 异步调用":        "Could not initialize the WinRT async call",
 	"系统没有安装任何 OCR 语言包；请在「设置 → 时间和语言 → 语言」中添加语言并勾选「光学字符识别」": "Windows has no OCR language pack installed. Add a language under Settings → Time & language → Language and tick Optical character recognition.",
 	"Windows 剪贴板读取失败：%s":      "Windows clipboard read failed: %s",

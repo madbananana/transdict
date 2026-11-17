@@ -903,6 +903,13 @@ func newTray(app *application.App, cfg *settings.Store, svc *gui.Service, icon, 
 			}
 		},
 	}
+
+	// Windows opens the menu on right-click, so the left button is free. A
+	// single click opens the translation window; a double click opens 设置.
+	// Wails 3.0.0 does not deliver the left click itself, so the platform file
+	// recovers it from the tray's window procedure.
+	installTrayClick(svc)
+
 	tray.SetMenu(trayMenu(cfg.Get(), actions))
 	l10n.OnChange(func() {
 		tray.SetMenu(trayMenu(cfg.Get(), actions))

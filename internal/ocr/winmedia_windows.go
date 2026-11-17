@@ -42,6 +42,12 @@ func (windowsOCR) Recognize(ctx context.Context, png []byte) ([]Block, error) {
 	if len(png) == 0 {
 		return nil, errors.New("没有可识别的图片")
 	}
+	// A one-line selection is below the size Windows OCR can read, so enlarge
+	// the picture before the helper turns it into a bitmap.
+	png, scale, err := upscaleForOCR(png)
+	if err != nil {
+		return nil, fmt.Errorf("Windows OCR：无法放大识别图片：%w", err)
+	}
 	dir, err := os.MkdirTemp("", "transdict-ocr-")
 	if err != nil {
 		return nil, fmt.Errorf("Windows OCR：无法创建临时目录：%w", err)
@@ -108,6 +114,11 @@ func (windowsOCR) Recognize(ctx context.Context, png []byte) ([]Block, error) {
 		// The preview shows this to the user; the log keeps the whole sentence
 		// for a bug report, including the PowerShell line number.
 		log.Printf("transdict: Windows OCR: %v", err)
+	}
+	if scale > 1 {
+		// The boxes belong to the enlarged picture the engine read; the preview
+		// draws them over the original crop, so map them back.
+		shrinkBlocks(blocks, scale)
 	}
 	return blocks, err
 }
@@ -204,8 +215,8 @@ try {
   foreach ($tag in $installed) { Add-Candidate $tag }
 
   $out = New-Object 'System.Collections.Generic.List[string]'
+  $tried = New-Object 'System.Collections.Generic.List[string]'
   $engineUsed = ''
-  $failure = ''
   foreach ($tag in $candidates) {
     $engine = $null
     try {
@@ -214,19 +225,28 @@ try {
     } catch {
       $engine = $null
     }
-    if ($null -eq $engine) { continue }
+    if ($null -eq $engine) {
+      [void]$tried.Add("$tag 不可用")
+      continue
+    }
 
     # One recognizer refusing the bitmap (a missing language pack, an
     # unsupported pixel format) must not stop the next candidate.
     try {
       $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
     } catch {
-      $failure = "$tag：$($_.Exception.Message)"
+      [void]$tried.Add("$tag：" + $_.Exception.Message)
       continue
     }
-    if ($null -eq $result) { continue }
+    if ($null -eq $result) {
+      [void]$tried.Add("$tag：无结果")
+      continue
+    }
     $lines = @($result.Lines)
-    if ($lines.Count -eq 0) { continue }
+    if ($lines.Count -eq 0) {
+      [void]$tried.Add("$tag：0 行")
+      continue
+    }
 
     foreach ($line in $lines) {
       $text = ([string]$line.Text).Trim()
@@ -260,8 +280,10 @@ try {
     break
   }
 
-  if ($out.Count -eq 0 -and $failure -ne '') {
-    throw "识别失败（$failure）"
+  if ($out.Count -eq 0) {
+    $detail = '没有可用的识别器'
+    if ($tried.Count -gt 0) { $detail = $tried -join '；' }
+    throw "没有识别到文字（$detail；图片 $($decoder.PixelWidth)x$($decoder.PixelHeight)）"
   }
 
   $out.Insert(0, "engine|" + [Uri]::EscapeDataString($engineUsed))
