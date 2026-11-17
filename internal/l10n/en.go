@@ -182,6 +182,7 @@ var en = map[string]string{
 	"忽略此版本":          "Skip This Version",
 	"更新失败":           "Update Failed",
 	"更新正在下载，请稍候":     "An update is already downloading; please wait",
+	"更新程序没有启动，请稍后重试": "The updater did not start; please try again shortly",
 	"正在安装新版本，应用即将退出；安装完成后会自动重新打开。":                 "Installing the new version; the app will quit and reopen automatically when it is done.",
 	"新版本已准备好，应用即将退出并自动重启。":                         "The new version is ready; the app will quit and restart automatically.",
 	"无法定位当前程序，已打开安装镜像。":                            "Could not locate the running app; the disk image is open.",

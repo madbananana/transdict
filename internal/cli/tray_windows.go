@@ -3,11 +3,13 @@
 package cli
 
 import (
+	"log"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
-	"unsafe"
 
+	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/w32"
 
 	"transdict/internal/gui"
@@ -19,33 +21,42 @@ import (
 // looks dead. Upstream (checked through v3.2.0-nightly) still has this, so the
 // hidden tray window is subclassed here: the click is recovered, and every
 // other message — including the right-click menu — still goes to Wails.
+//
+// WM_LBUTTONUP is also matched: NIM_SETVERSION can fail, in which case the
+// shell stays in legacy mode and sends the old message instead of NIN_SELECT.
+// A double click under version 4 is a WM_LBUTTONDBLCLK of its own, not a second
+// NIN_SELECT, so it needs a separate branch; waiting for two clicks never sees
+// it.
 const (
-	ninSelect     = 0x0400
-	ninKeySelect  = 0x0401
-	wmUserSystray = uint32(w32.WM_USER + 1)
-	// wndClassName is application.Options.Windows.WndClass's default; this app
-	// does not change it.
-	wndClassName = "WailsWebviewWindow"
+	ninSelect       = 0x0400
+	ninKeySelect    = 0x0401
+	wmLButtonUp     = 0x0202
+	wmLButtonDblClk = 0x0203
+	wmUserSystray   = uint32(w32.WM_USER + 1)
 )
 
 var (
-	trayMu           sync.Mutex
-	trayClickFn      func()
-	trayOldProcs     = map[uintptr]uintptr{}
-	findWindowEx     = syscall.NewLazyDLL("user32.dll").NewProc("FindWindowExW")
-	getDoubleClickMs = syscall.NewLazyDLL("user32.dll").NewProc("GetDoubleClickTime")
+	trayMu            sync.Mutex
+	trayClickFn       func()
+	trayDoubleClickFn func()
+	trayOldProcs      = map[uintptr]uintptr{}
+	findWindowEx      = syscall.NewLazyDLL("user32.dll").NewProc("FindWindowExW")
+	getDoubleClickMs  = syscall.NewLazyDLL("user32.dll").NewProc("GetDoubleClickTime")
 )
 
 var trayWndProc = syscall.NewCallback(func(hwnd, msg, wparam, lparam uintptr) uintptr {
 	if uint32(msg) == wmUserSystray {
+		var fn func()
+		trayMu.Lock()
 		switch uint16(lparam) {
-		case ninSelect, ninKeySelect:
-			trayMu.Lock()
-			fn := trayClickFn
-			trayMu.Unlock()
-			if fn != nil {
-				fn()
-			}
+		case ninSelect, ninKeySelect, wmLButtonUp:
+			fn = trayClickFn
+		case wmLButtonDblClk:
+			fn = trayDoubleClickFn
+		}
+		trayMu.Unlock()
+		if fn != nil {
+			fn()
 		}
 	}
 	trayMu.Lock()
@@ -57,41 +68,53 @@ var trayWndProc = syscall.NewCallback(func(hwnd, msg, wparam, lparam uintptr) ui
 	return w32.CallWindowProc(old, w32.HWND(hwnd), uint32(msg), wparam, lparam)
 })
 
-func installTrayClick(svc *gui.Service) {
+func installTrayClick(tray *application.SystemTray, svc *gui.Service) {
+	// Registered as well: in legacy mode Wails' own WM_LBUTTONUP and
+	// WM_LBUTTONDBLCLK handlers fire too, and the duplicate guards merge them.
+	clicker := newTrayClicker(svc)
+	tray.OnClick(clicker.click)
+	tray.OnDoubleClick(clicker.doubleClick)
+
 	trayMu.Lock()
-	trayClickFn = trayClickHandler(svc)
+	trayClickFn = clicker.click
+	trayDoubleClickFn = clicker.doubleClick
 	trayMu.Unlock()
 	// The tray window is created by Wails when the application starts, which is
 	// after this recipe runs. Poll briefly instead of racing that sequence.
 	go func() {
-		for range 50 {
-			if hookTrayWindow() {
+		for range 100 {
+			if hookTrayWindows() {
 				return
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
+		log.Printf("transdict: 没有找到托盘消息窗口，左键点击将不可用")
 	}()
 }
 
-func hookTrayWindow() bool {
-	class, err := syscall.UTF16PtrFromString(wndClassName)
-	if err != nil {
-		return false
-	}
+// hookTrayWindows subclasses every message-only window whose class comes from
+// Wails. The class name is not hard-coded: it comes from
+// Options.Windows.WndClass, and matching on the default only would silently
+// stop working if that changes.
+func hookTrayWindows() bool {
 	parent := uintptr(w32.HWND_MESSAGE)
 	var after uintptr
-	hooked := false
+	var hooked []string
 	for {
-		hwnd, _, _ := findWindowEx.Call(parent, after, uintptr(unsafe.Pointer(class)), 0)
+		hwnd, _, _ := findWindowEx.Call(parent, after, 0, 0)
 		if hwnd == 0 {
 			break
 		}
 		after = hwnd
+		class := w32.GetClassName(w32.HWND(hwnd))
+		if !strings.Contains(strings.ToLower(class), "wails") {
+			continue
+		}
 		trayMu.Lock()
 		_, seen := trayOldProcs[hwnd]
 		trayMu.Unlock()
 		if seen {
-			hooked = true
+			hooked = append(hooked, class)
 			continue
 		}
 		old := w32.GetWindowLongPtr(w32.HWND(hwnd), w32.GWLP_WNDPROC)
@@ -104,54 +127,109 @@ func hookTrayWindow() bool {
 		trayOldProcs[hwnd] = old
 		trayMu.Unlock()
 		w32.SetWindowLongPtr(w32.HWND(hwnd), w32.GWLP_WNDPROC, trayWndProc)
-		hooked = true
+		hooked = append(hooked, class)
 	}
-	return hooked
+	if len(hooked) > 0 {
+		log.Printf("transdict: 已接管托盘窗口 %v", hooked)
+	}
+	return len(hooked) > 0
 }
 
-// trayClickHandler separates the two answers Windows sends through the same
-// NIN_SELECT event. A single click waits out the double-click window before
-// opening the main window; a second click inside it opens 设置 instead.
-func trayClickHandler(svc *gui.Service) func() {
+// trayClicker separates the reports Windows sends for one gesture. A single
+// click waits out the double-click window before opening the main window; a
+// second click inside it, or a version-4 double-click notification, opens 设置
+// instead. Duplicates from the hook and Wails' own handlers are dropped.
+type trayClicker struct {
+	svc   *gui.Service
+	delay time.Duration
+
+	mu            sync.Mutex
+	last          time.Time
+	suppressUntil time.Time
+	settingsAt    time.Time
+	pending       *time.Timer
+	generation    uint64
+}
+
+func newTrayClicker(svc *gui.Service) *trayClicker {
 	// Honor the user's double-click speed; Windows defaults to 500 ms.
 	delay := 500 * time.Millisecond
 	if v, _, _ := getDoubleClickMs.Call(); v > 0 {
 		delay = time.Duration(v) * time.Millisecond
 	}
-	var mu sync.Mutex
-	var last time.Time
-	var pending *time.Timer
-	var generation uint64
-	return func() {
-		now := time.Now()
-		mu.Lock()
-		generation++
-		gen := generation
-		double := !last.IsZero() && now.Sub(last) < delay
-		last = now
-		if double {
-			last = time.Time{}
-			if pending != nil {
-				pending.Stop()
-				pending = nil
-			}
-			mu.Unlock()
-			svc.OpenSettings()
+	return &trayClicker{svc: svc, delay: delay}
+}
+
+func (c *trayClicker) click() {
+	now := time.Now()
+	c.mu.Lock()
+	if now.Before(c.suppressUntil) {
+		c.mu.Unlock()
+		return
+	}
+	// The same physical click can arrive through more than one channel: the
+	// hook, Wails' legacy handler, and (for a double click) a following button
+	// up. Only the first report counts.
+	if !c.last.IsZero() && now.Sub(c.last) < 50*time.Millisecond {
+		c.mu.Unlock()
+		return
+	}
+	c.generation++
+	gen := c.generation
+	if !c.last.IsZero() && now.Sub(c.last) < c.delay {
+		c.last = time.Time{}
+		c.suppressUntil = now.Add(min(c.delay, 600*time.Millisecond))
+		c.stopPending()
+		c.mu.Unlock()
+		c.openSettings()
+		return
+	}
+	c.last = now
+	c.stopPending()
+	c.pending = time.AfterFunc(c.delay, func() {
+		c.mu.Lock()
+		if gen != c.generation {
+			c.mu.Unlock()
 			return
 		}
-		if pending != nil {
-			pending.Stop()
-		}
-		pending = time.AfterFunc(delay, func() {
-			mu.Lock()
-			if gen != generation {
-				mu.Unlock()
-				return
-			}
-			pending = nil
-			mu.Unlock()
-			svc.OpenMain()
-		})
-		mu.Unlock()
+		c.pending = nil
+		c.mu.Unlock()
+		c.svc.OpenMain()
+	})
+	c.mu.Unlock()
+}
+
+// doubleClick is the version-4 report of a double click. It cancels the single
+// click that the first half already scheduled and quiets the trailing button-up
+// messages a legacy shell still sends.
+func (c *trayClicker) doubleClick() {
+	now := time.Now()
+	c.mu.Lock()
+	c.generation++
+	c.last = time.Time{}
+	c.suppressUntil = now.Add(min(c.delay, 600*time.Millisecond))
+	c.stopPending()
+	c.mu.Unlock()
+	c.openSettings()
+}
+
+func (c *trayClicker) stopPending() {
+	if c.pending != nil {
+		c.pending.Stop()
+		c.pending = nil
 	}
+}
+
+// openSettings drops a second 设置 request from the same gesture; the hook and
+// Wails can both report one double click.
+func (c *trayClicker) openSettings() {
+	now := time.Now()
+	c.mu.Lock()
+	if !c.settingsAt.IsZero() && now.Sub(c.settingsAt) < 300*time.Millisecond {
+		c.mu.Unlock()
+		return
+	}
+	c.settingsAt = now
+	c.mu.Unlock()
+	c.svc.OpenSettings()
 }

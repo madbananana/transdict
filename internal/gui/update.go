@@ -106,6 +106,7 @@ func (s *Service) InstallUpdate() (string, error) {
 	cfg := s.cfg.Get()
 	rel, err := s.latest(updateSource(cfg.UpdateURL), cfg.IncludeBeta, checkBudget)
 	if err != nil {
+		log.Printf("transdict: 检查更新失败: %v", err)
 		return "", err
 	}
 	if rel == nil {
@@ -113,6 +114,7 @@ func (s *Service) InstallUpdate() (string, error) {
 	}
 	asset := update.ChooseAsset(rel, runtime.GOOS, runtime.GOARCH)
 	if asset == nil {
+		log.Printf("transdict: 发布 %s 中没有 %s/%s 的安装包", rel.Version, runtime.GOOS, runtime.GOARCH)
 		return "", errors.New("发布中没有适用于当前系统的安装包")
 	}
 	dir, err := update.SaveDir()
@@ -120,6 +122,7 @@ func (s *Service) InstallUpdate() (string, error) {
 		return "", err
 	}
 	path := filepath.Join(dir, filepath.Base(asset.Name))
+	log.Printf("transdict: 下载 %s 到 %s", rel.Version, path)
 
 	ctx, cancel := context.WithTimeout(context.Background(), downloadBudget)
 	defer cancel()
@@ -131,12 +134,15 @@ func (s *Service) InstallUpdate() (string, error) {
 		s.wails.Event.Emit(EventUpdateProgress, progress)
 	})
 	if err != nil {
+		log.Printf("transdict: 下载更新失败: %v", err)
 		return "", err
 	}
 	quit, message, err := update.Launch(path)
 	if err != nil {
+		log.Printf("transdict: 启动更新程序失败: %v", err)
 		return "", err
 	}
+	log.Printf("transdict: 更新程序已启动（%s）", message)
 	// The installed build is now at least as new as the version that was
 	// skipped, so that note in the settings page is stale.
 	s.clearSkipped()
@@ -192,6 +198,7 @@ func (s *Service) checkUpdate(manual bool) {
 	report, err := s.updateReport(updateSource(cfg.UpdateURL), cfg.IncludeBeta)
 	if err != nil {
 		// A silent failure is right at launch and wrong when the user asked.
+		log.Printf("transdict: 检查更新失败: %v", err)
 		if manual {
 			s.inform(title, err.Error())
 		}
@@ -207,8 +214,10 @@ func (s *Service) checkUpdate(manual bool) {
 	// 忽略此版本 only quiets the automatic check; a manual one still reports it
 	// so the user can change their mind.
 	if !manual && report.Version == cfg.SkippedUpdate {
+		log.Printf("transdict: 自动更新跳过已忽略的版本 %s", report.Version)
 		return
 	}
+	log.Printf("transdict: 发现新版本 %s（当前 %s，手动 %v）", report.Version, report.Current, manual)
 	s.promptUpdate(report)
 }
 
