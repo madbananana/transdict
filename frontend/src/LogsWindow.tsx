@@ -1,7 +1,7 @@
 // 调试日志 is EasyDict's 显示调试日志窗口: the tail of the file the app writes,
 // read live so a failure that just happened can be inspected without Finder.
 import { useEffect, useRef, useState } from 'react'
-import { Service, isMac } from './api'
+import { Service } from './api'
 import { t } from './i18n'
 import WindowControls from './WindowControls'
 
@@ -38,10 +38,7 @@ export default function LogsWindow() {
         <div className="drag">
           <span className="title">{t('调试日志')}</span>
         </div>
-        <WindowControls />
-        {!isMac && (
-          <button className="ghost tiny" onClick={() => void Service.CloseLogs()}>{t('关闭')}</button>
-        )}
+        <WindowControls onClose={() => void Service.CloseLogs()} />
       </div>
       <pre
         className="logview"

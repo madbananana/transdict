@@ -36,8 +36,10 @@ import (
 //
 // trayIcon is an optional monochrome glyph: macOS menu bars want a template
 // image the system tints for light and dark, not the coloured app icon. The
-// square variant is the same mark framed by 菜单栏图标.
-func Main(version string, assets embed.FS, appIcon, trayIcon, squareTrayIcon []byte) {
+// square variant is the same mark framed by 菜单栏图标. The Windows tray has its
+// own icon: the notification area asks for 16-24px, too small for the app
+// icon's two glyphs.
+func Main(version string, assets embed.FS, appIcon, trayIcon, squareTrayIcon, windowsTrayIcon []byte) {
 	if len(os.Args) > 1 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
 		fmt.Println("transdict " + version)
 		return
@@ -112,7 +114,7 @@ func Main(version string, assets embed.FS, appIcon, trayIcon, squareTrayIcon []b
 	// OnChange yet, so this first Set cannot redraw anything that is not there.
 	l10n.Set(cfg.Get().UILang)
 
-	app := application.New(application.Options{
+	opts := application.Options{
 		Name:        "Transdict",
 		Description: l10n.T("跨平台词典与翻译工具"),
 		Services: []application.Service{
@@ -128,7 +130,14 @@ func Main(version string, assets embed.FS, appIcon, trayIcon, squareTrayIcon []b
 			// choice — not a later toggle — decides the first frame.
 			ActivationPolicy: activationPolicy(cfg.Get().ShowInDock),
 		},
-	})
+	}
+	// The packaged Windows build takes its icon from the resource compiler; a
+	// dev run has no .syso, so this keeps the taskbar button branded there. It
+	// is Windows-only because macOS takes the bundle icon.
+	if runtime.GOOS == "windows" {
+		opts.Icon = appIcon
+	}
+	app := application.New(opts)
 
 	svc.Attach(app)
 
@@ -454,7 +463,7 @@ func Main(version string, assets embed.FS, appIcon, trayIcon, squareTrayIcon []b
 
 	// The tray is native chrome drawn once, so switching language means redrawing
 	// the menu; the webview reloads its own tables instead.
-	tray := newTray(app, cfg, svc, appIcon, trayIcon, squareTrayIcon)
+	tray := newTray(app, cfg, svc, appIcon, trayIcon, squareTrayIcon, windowsTrayIcon)
 
 	// 隐藏菜单栏图标 is chrome the user can turn off without a relaunch. The
 	// status item can only be ordered out once the application loop is running,
@@ -795,11 +804,13 @@ func trayGlyph(style string, bare, square []byte) []byte {
 	return bare
 }
 
-func newTray(app *application.App, cfg *settings.Store, svc *gui.Service, icon, template, square []byte) *application.SystemTray {
+func newTray(app *application.App, cfg *settings.Store, svc *gui.Service, icon, template, square, windowsIcon []byte) *application.SystemTray {
 	tray := app.SystemTray.New()
 	glyph := func(style string) []byte { return trayGlyph(style, template, square) }
 	if runtime.GOOS == "darwin" && len(template) > 0 {
 		tray.SetTemplateIcon(glyph(cfg.Get().MenuBarIconStyle))
+	} else if runtime.GOOS == "windows" && len(windowsIcon) > 0 {
+		tray.SetIcon(windowsIcon)
 	} else {
 		tray.SetIcon(icon)
 	}

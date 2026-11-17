@@ -285,6 +285,7 @@ var en = map[string]string{
 	"隐藏其他":            "Hide Others",
 	"全部显示":            "Show All",
 	"最小化":             "Minimize",
+	"最大化":             "Maximize",
 	"缩放":              "Zoom",
 	"关闭":              "Close",
 	"前置全部窗口":          "Bring All to Front",

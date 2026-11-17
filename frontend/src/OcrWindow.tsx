@@ -117,8 +117,7 @@ export default function OcrWindow() {
             <span className="title">{t('OCR 预览')}</span>
             {note && <span className="status">{note}</span>}
           </div>
-          <WindowControls />
-          <button className="ghost tiny" onClick={() => void Service.CloseOCR()}>{t('关闭')}</button>
+          <WindowControls onClose={() => void Service.CloseOCR()} />
         </div>
       )}
 

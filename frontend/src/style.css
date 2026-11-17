@@ -3756,6 +3756,13 @@ button.close:hover {
   background: var(--bg-elev-hover);
 }
 
+/* The red close hover is the one caption control Windows users expect to see
+   change colour, and it separates close from the two window-state buttons. */
+.winbtn.close:hover {
+  color: #fff;
+  background: #c42b1c;
+}
+
 /* The traffic-light row's right-hand controls: a square hit area keeps the pin,
    gear and close glyphs on one baseline whatever their font renders them at. */
 .dragbar button.icon {

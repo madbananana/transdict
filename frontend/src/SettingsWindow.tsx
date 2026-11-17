@@ -3,7 +3,7 @@
 // window is deliberately narrow.
 import { useState } from 'react'
 import Settings from './Settings'
-import { Service, isMac } from './api'
+import { Service } from './api'
 import { t } from './i18n'
 import WindowControls from './WindowControls'
 
@@ -16,12 +16,7 @@ export default function SettingsWindow() {
         <div className="drag">
           <span className="title">{tab || t('设置')}</span>
         </div>
-        <WindowControls />
-        {/* macOS closes with the red traffic light; only the frameless Windows
-            window needs a close control of its own. */}
-        {!isMac && (
-          <button className="ghost tiny" onClick={() => void Service.CloseSettings()}>{t('关闭')}</button>
-        )}
+        <WindowControls maximizable={false} onClose={() => void Service.CloseSettings()} />
       </div>
       {/* The panel used to receive the saved config; the two windows each read
           the store themselves now, so there is nothing to hand back. */}

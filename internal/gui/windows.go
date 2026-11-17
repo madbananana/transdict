@@ -74,6 +74,11 @@ func NewMainWindow(app *application.App, cfg *settings.Store) application.Window
 			// window, so it is fixed when the window is built and a toggle
 			// takes effect on the next launch.
 			HiddenOnTaskbar: !cfg.Get().ShowInDock,
+			// Frameless removes the native caption, so hit testing has to come
+			// from the page's --wails-non-client-region rectangles. Wails only
+			// turns that tracking on for composition-hosted windows; without
+			// it the caption strip neither drags nor runs the custom buttons.
+			WebView2CompositionHosting: true,
 		},
 		// A stored 置顶 must hold from the first frame, not from the first
 		// result: the window is often opened to compare with what is behind it.
@@ -295,7 +300,8 @@ func NewSettingsWindow(app *application.App, cfg *settings.Store) application.Wi
 			Backdrop:                application.MacBackdropTranslucent,
 		},
 		Windows: application.WindowsWindow{
-			HiddenOnTaskbar: !cfg.Get().ShowInDock,
+			HiddenOnTaskbar:            !cfg.Get().ShowInDock,
+			WebView2CompositionHosting: ownChrome(),
 		},
 		BackgroundColour: application.NewRGB(10, 12, 18),
 		URL:              "/#/settings",
@@ -340,7 +346,8 @@ func NewLogsWindow(app *application.App, cfg *settings.Store) application.Window
 			Backdrop:                application.MacBackdropTranslucent,
 		},
 		Windows: application.WindowsWindow{
-			HiddenOnTaskbar: !cfg.Get().ShowInDock,
+			HiddenOnTaskbar:            !cfg.Get().ShowInDock,
+			WebView2CompositionHosting: ownChrome(),
 		},
 		BackgroundColour: application.NewRGB(10, 12, 18),
 		URL:              "/#/logs",
@@ -376,7 +383,8 @@ func NewOCRWindow(app *application.App, cfg *settings.Store) application.Window 
 			Backdrop: application.MacBackdropTranslucent,
 		},
 		Windows: application.WindowsWindow{
-			HiddenOnTaskbar: !cfg.Get().ShowInDock,
+			HiddenOnTaskbar:            !cfg.Get().ShowInDock,
+			WebView2CompositionHosting: true,
 		},
 		// EasyDict builds this window with .borderless and a 12pt rounded sheet,
 		// so the caption is the page's own: no traffic lights, a pin at the left

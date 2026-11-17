@@ -102,6 +102,10 @@ func (windowsOCR) Recognize(ctx context.Context, png []byte) ([]Block, error) {
 // installed language, and returns the lines with their pixel boxes as base64
 // JSON. The script stays ASCII apart from its message literals, which the BOM
 // above protects.
+//
+// The awaiter is picked from GetAwaiter and matched on the exact closed generic
+// IAsyncOperation`1. The AsTask overloads differ in progress reporting, and
+// feeding the wrong one to reflection Invoke raises "参数类型不匹配".
 const windowsOCRPowerShell = `
 param(
   [Parameter(Mandatory=$true)][string]$ImagePath,
@@ -119,24 +123,32 @@ function Write-Payload($payload) {
 try {
   Add-Type -AssemblyName System.Runtime.WindowsRuntime | Out-Null
   [Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime] | Out-Null
+  [Windows.Storage.Streams.IRandomAccessStream, Windows.Storage.Streams, ContentType=WindowsRuntime] | Out-Null
+  [Windows.Storage.Streams.RandomAccessStream, Windows.Storage.Streams, ContentType=WindowsRuntime] | Out-Null
   [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType=WindowsRuntime] | Out-Null
+  [Windows.Graphics.Imaging.SoftwareBitmap, Windows.Graphics.Imaging, ContentType=WindowsRuntime] | Out-Null
   [Windows.Globalization.Language, Windows.Globalization, ContentType=WindowsRuntime] | Out-Null
-  [Windows.Media.Ocr.OcrEngine, Windows.Media.Ocr, ContentType=WindowsRuntime] | Out-Null
+  [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType=WindowsRuntime] | Out-Null
+  [Windows.Media.Ocr.OcrResult, Windows.Foundation, ContentType=WindowsRuntime] | Out-Null
 
-  $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
-    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -like 'IAsyncOperation*'
-  })[0]
-  if ($null -eq $asTask) { throw '无法初始化 WinRT 异步调用' }
+  # GetAwaiter is generic over IAsyncOperation; 96 is the backtick that
+  # separates the CLR name from its type argument (a literal one would close
+  # the Go raw string this script lives in).
+  $awaiter = [WindowsRuntimeSystemExtensions].GetMember('GetAwaiter', 'Method', 'Public,Static') |
+    Where-Object {
+      $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq ('IAsyncOperation' + [char]96 + '1')
+    } |
+    Select-Object -First 1
+  if ($null -eq $awaiter) { throw '无法初始化 WinRT 异步调用' }
 
-  function Await($operation, [string]$typeName) {
-    $generic = $asTask.MakeGenericMethod([Type]::GetType($typeName))
-    return $generic.Invoke($null, @($operation)).GetAwaiter().GetResult()
+  function Await([object]$operation, [Type]$result) {
+    return $awaiter.MakeGenericMethod($result).Invoke($null, @($operation)).GetResult()
   }
 
-  $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($ImagePath)) 'Windows.Storage.StorageFile, Windows.Storage, ContentType=WindowsRuntime'
-  $stream = Await ($file.OpenReadAsync()) 'Windows.Storage.Streams.IRandomAccessStreamWithContentType, Windows.Storage.Streams, ContentType=WindowsRuntime'
-  $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) 'Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType=WindowsRuntime'
-  $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) 'Windows.Graphics.Imaging.SoftwareBitmap, Windows.Graphics.Imaging, ContentType=WindowsRuntime'
+  $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($ImagePath)) ([Windows.Storage.StorageFile])
+  $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+  $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+  $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
 
   $installed = @()
   foreach ($language in [Windows.Media.Ocr.OcrEngine]::AvailableRecognizerLanguages) {
@@ -175,6 +187,7 @@ try {
 
   $blocks = New-Object 'System.Collections.Generic.List[object]'
   $engineUsed = ''
+  $failure = ''
   foreach ($tag in $candidates) {
     $engine = $null
     try {
@@ -185,7 +198,14 @@ try {
     }
     if ($null -eq $engine) { continue }
 
-    $result = Await ($engine.RecognizeAsync($bitmap)) 'Windows.Media.Ocr.OcrResult, Windows.Media.Ocr, ContentType=WindowsRuntime'
+    # One recognizer refusing the bitmap (a missing language pack, an
+    # unsupported pixel format) must not stop the next candidate.
+    try {
+      $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+    } catch {
+      $failure = "$tag：$($_.Exception.Message)"
+      continue
+    }
     if ($null -eq $result) { continue }
     $lines = @($result.Lines)
     if ($lines.Count -eq 0) { continue }
@@ -221,8 +241,18 @@ try {
     break
   }
 
+  if ($blocks.Count -eq 0 -and $failure -ne '') {
+    throw "识别失败（$failure）"
+  }
+
   Write-Payload ([ordered]@{ blocks = @($blocks); engine = $engineUsed })
 } catch {
-  Write-Payload ([ordered]@{ blocks = @(); engine = ''; error = $_.Exception.Message })
+  $reason = $_.Exception.Message
+  $inner = $_.Exception.InnerException
+  if ($null -ne $inner -and $inner.Message -ne $reason) { $reason = "$reason：$($inner.Message)" }
+  if ($_.InvocationInfo -and $_.InvocationInfo.ScriptLineNumber) {
+    $reason = "$reason（脚本第 $($_.InvocationInfo.ScriptLineNumber) 行）"
+  }
+  Write-Payload ([ordered]@{ blocks = @(); engine = ''; error = $reason })
 }
 `
