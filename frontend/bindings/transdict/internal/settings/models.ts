@@ -187,10 +187,17 @@ export interface Config {
     "updateURL": string;
 
     /**
-     * AutoUpdate asks once per launch and only speaks up when the source is
-     * ahead. A manual check reports what it found either way.
+     * AutoUpdate asks at launch and every few hours, and only speaks up when the
+     * source is ahead. A manual check reports what it found either way.
      */
     "autoUpdate": boolean;
+
+    /**
+     * SkippedUpdate is the version the user told the automatic check to ignore.
+     * Only that exact version stays quiet: a later release asks again, and a
+     * manual check still reports it.
+     */
+    "skippedUpdate": string;
 
     /**
      * IncludeBeta lets a pre-release answer 检查更新. Developers tag builds like

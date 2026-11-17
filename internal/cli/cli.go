@@ -31,6 +31,11 @@ import (
 	"transdict/internal/shortcut"
 )
 
+// autoUpdateEvery is how often a running tray app asks again. Six hours is
+// frequent enough to catch a release the same day without turning the release
+// feed into a heartbeat.
+const autoUpdateEvery = 6 * time.Hour
+
 // Main assembles and runs the app. Embedded assets arrive from package main
 // because //go:embed paths are relative to the declaring package.
 //
@@ -518,14 +523,23 @@ func Main(version string, assets embed.FS, appIcon, trayIcon, squareTrayIcon, wi
 		application.InvokeAsync(func() { dock.Set(docked) })
 	})
 
-	// The launch check waits on somebody else's server, so it gets its own
+	// The automatic check waits on somebody else's server, so it gets its own
 	// goroutine: a release host that is down must not delay a window. The alert
 	// it may show is native chrome, so the question has to wait for the loop —
-	// asking before ApplicationStarted has no main thread to draw it on.
-	if cfg.Get().AutoUpdate {
-		app.Event.OnApplicationEvent(events.Common.ApplicationStarted,
-			func(*application.ApplicationEvent) { go svc.AutoCheckOnLaunch() })
-	}
+	// asking before ApplicationStarted has no main thread to draw it on. A tray
+	// app can stay open for weeks, so the same check repeats instead of trusting
+	// that the next launch is soon.
+	app.Event.OnApplicationEvent(events.Common.ApplicationStarted,
+		func(*application.ApplicationEvent) {
+			go svc.AutoCheck()
+			go func() {
+				ticker := time.NewTicker(autoUpdateEvery)
+				defer ticker.Stop()
+				for range ticker.C {
+					svc.AutoCheck()
+				}
+			}()
+		})
 
 	if err := app.Run(); err != nil {
 		log.Fatal(err)

@@ -165,9 +165,14 @@ type Config struct {
 	// the app cannot know where somebody else's builds are published.
 	UpdateURL string `json:"updateURL"`
 
-	// AutoUpdate asks once per launch and only speaks up when the source is
-	// ahead. A manual check reports what it found either way.
+	// AutoUpdate asks at launch and every few hours, and only speaks up when the
+	// source is ahead. A manual check reports what it found either way.
 	AutoUpdate bool `json:"autoUpdate"`
+
+	// SkippedUpdate is the version the user told the automatic check to ignore.
+	// Only that exact version stays quiet: a later release asks again, and a
+	// manual check still reports it.
+	SkippedUpdate string `json:"skippedUpdate"`
 
 	// IncludeBeta lets a pre-release answer 检查更新. Developers tag builds like
 	// 1.4.0-beta.1 long before they are worth installing, so they stay hidden

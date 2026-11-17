@@ -1389,6 +1389,20 @@ function General({ part, cfg, run, setStatus }: {
     void Service.OpenUpdatePage().catch((e) => setStatus(errMsg(e)))
   }
 
+  // 忽略此版本 writes the field the automatic prompt also writes, so the note
+  // under the buttons stays the one place that says what is being skipped.
+  const ignoreUpdate = () => {
+    if (!update) return
+    const v = update.version
+    setUpdate(null)
+    run(t('保存…'), async () => {
+      const fresh = await SettingsService.Get()
+      await SettingsService.Save({ ...fresh, skippedUpdate: v } as Config)
+    }, () => t('已忽略 {v} 的自动提示', { v }))
+  }
+
+  const clearIgnore = () => patch({ skippedUpdate: '' })
+
   // 所选目录不可写 is EasyDict's warning under the folder picker: the notebook
   // cannot append there, so the switch would look on while every query failed to
   // save. A path that does not exist yet is not a problem — Go creates it on the
@@ -1637,7 +1651,7 @@ function General({ part, cfg, run, setStatus }: {
           onSave={(v) => patch({ updateURL: v })}
         />
         <p className="noteline">{t('一个 JSON 文档，写明最新版本号与下载地址；GitHub 的 Releases API 直接可用。')}</p>
-        {toggle('autoUpdate', t('自动检查应用更新'), t('只在发现新版本时提示；地址留空时使用官方 GitHub 发布源。'))}
+        {toggle('autoUpdate', t('自动检查应用更新'), t('启动时和运行期间定时检查；发现新版本时询问是否安装，也可忽略该版本。'))}
         {toggle('includeBeta', t('包括 Beta 版本'), t('抢先体验新功能，但可能不稳定'))}
         <div className="actionrow">
           <span className="byline">
@@ -1652,6 +1666,9 @@ function General({ part, cfg, run, setStatus }: {
                 <button className="tiny" disabled={installing} onClick={openUpdatePage}>
                   {t('打开发布页')}
                 </button>
+                <button className="tiny" disabled={installing} onClick={ignoreUpdate}>
+                  {t('忽略此版本')}
+                </button>
               </>
             )}
             <button className="tiny" disabled={checking || installing} onClick={checkUpdate}>
@@ -1659,6 +1676,15 @@ function General({ part, cfg, run, setStatus }: {
             </button>
           </div>
         </div>
+        {cfg.skippedUpdate && (
+          <div className="row-end">
+            <span className="noteline">{t('已忽略 {v} 的自动更新提示', { v: cfg.skippedUpdate })}</span>
+            <button className="ghost tiny" onClick={clearIgnore}>{t('取消忽略')}</button>
+          </div>
+        )}
+        {isMac && (
+          <p className="noteline">{t('自动更新会替换当前应用；未签名版本可能需要重新授予录屏与辅助功能权限。')}</p>
+        )}
       </div>
 
       <div className="group">

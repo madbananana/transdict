@@ -292,10 +292,9 @@ export function ImportConfigFile(): $CancellablePromise<string> {
 
 /**
  * InstallUpdate is 下载并安装 on the settings page. It fetches the release
- * again, downloads the one asset this OS installs, and hands it to the system.
- * On Windows the installer replaces the running executable, so the call answers
- * first and the app quits a moment later; on macOS and Linux the package opens
- * beside the running app.
+ * again, downloads the one asset this OS installs, and hands it over. Windows
+ * replaces the executable in place and macOS swaps the app bundle, so both
+ * answer first and quit a moment later; Linux gives the package to the desktop.
  */
 export function InstallUpdate(): $CancellablePromise<string> {
     return $Call.ByID(1817311122);

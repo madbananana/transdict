@@ -80,6 +80,10 @@ type Service struct {
 	// version is the build the user is running, which is the left-hand side of
 	// every 检查更新 answer.
 	version string
+	// updateMu and updating keep two clicks, or a prompt and the settings page,
+	// from downloading the same release at once.
+	updateMu sync.Mutex
+	updating bool
 
 	mu       sync.Mutex
 	session  string

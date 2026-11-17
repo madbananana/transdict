@@ -6,12 +6,14 @@ package gui
 import (
 	"context"
 	"errors"
+	"log"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"transdict/internal/l10n"
+	"transdict/internal/settings"
 	"transdict/internal/update"
 )
 
@@ -71,19 +73,36 @@ func (s *Service) CheckUpdateNow() {
 	s.checkUpdate(true)
 }
 
-// AutoCheckOnLaunch asks once and only speaks when there is something to say.
+// AutoCheck is the quiet check at launch and on the periodic tick. It reads the
+// setting now rather than when the timer was installed, so switching automatic
+// checks off stops both without a relaunch.
 //
 //wails:ignore
-func (s *Service) AutoCheckOnLaunch() {
+func (s *Service) AutoCheck() {
+	if !s.cfg.Get().AutoUpdate {
+		return
+	}
 	s.checkUpdate(false)
 }
 
 // InstallUpdate is 下载并安装 on the settings page. It fetches the release
-// again, downloads the one asset this OS installs, and hands it to the system.
-// On Windows the installer replaces the running executable, so the call answers
-// first and the app quits a moment later; on macOS and Linux the package opens
-// beside the running app.
+// again, downloads the one asset this OS installs, and hands it over. Windows
+// replaces the executable in place and macOS swaps the app bundle, so both
+// answer first and quit a moment later; Linux gives the package to the desktop.
 func (s *Service) InstallUpdate() (string, error) {
+	s.updateMu.Lock()
+	if s.updating {
+		s.updateMu.Unlock()
+		return "", errors.New("更新正在下载，请稍候")
+	}
+	s.updating = true
+	s.updateMu.Unlock()
+	defer func() {
+		s.updateMu.Lock()
+		s.updating = false
+		s.updateMu.Unlock()
+	}()
+
 	cfg := s.cfg.Get()
 	rel, err := s.latest(updateSource(cfg.UpdateURL), cfg.IncludeBeta, checkBudget)
 	if err != nil {
@@ -114,10 +133,13 @@ func (s *Service) InstallUpdate() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	quit, err := update.Launch(path)
+	quit, message, err := update.Launch(path)
 	if err != nil {
 		return "", err
 	}
+	// The installed build is now at least as new as the version that was
+	// skipped, so that note in the settings page is stale.
+	s.clearSkipped()
 	if quit {
 		// The JS call has to answer before the window disappears; three seconds
 		// is enough for the status line to paint and for the installer to show
@@ -127,7 +149,7 @@ func (s *Service) InstallUpdate() (string, error) {
 			s.wails.Quit()
 		}()
 	}
-	return l10n.T(update.LaunchMessage()), nil
+	return l10n.T(message), nil
 }
 
 // OpenUpdatePage opens the release page of the newest published build. It goes
@@ -176,34 +198,63 @@ func (s *Service) checkUpdate(manual bool) {
 		return
 	}
 	if !report.Newer() {
+		s.clearSkipped()
 		if manual {
 			s.inform(title, l10n.T("已是最新版本")+"："+report.Current)
 		}
 		return
 	}
+	// 忽略此版本 only quiets the automatic check; a manual one still reports it
+	// so the user can change their mind.
+	if !manual && report.Version == cfg.SkippedUpdate {
+		return
+	}
+	s.promptUpdate(report)
+}
+
+// promptUpdate is the three-way answer to a discovered release: install now,
+// later, or never for this version. The skip is stored by version, so the next
+// release asks again.
+func (s *Service) promptUpdate(report UpdateReport) {
+	title := l10n.T("发现新版本")
 	body := l10n.T("发现新版本") + " " + report.Version + "（" + l10n.T("当前") + " " + report.Current + "）"
 	if report.Notes != "" {
 		body += "\n\n" + report.Notes
 	}
-	s.ask(title, body, report.URL)
+	dialog := s.wails.Dialog.Info().SetTitle(title).SetMessage(body)
+	dialog.AddButton(l10n.T("立即更新")).OnClick(func() { go s.installFromPrompt() })
+	dialog.AddButton(l10n.T("稍后"))
+	dialog.AddButton(l10n.T("忽略此版本")).OnClick(func() { s.skipVersion(report.Version) })
+	dialog.Show()
+}
+
+// installFromPrompt runs the same download the settings page starts. The
+// progress events only reach a window that is listening, so a failure has to be
+// reported here; success on Windows and macOS ends with the app restarting.
+func (s *Service) installFromPrompt() {
+	if _, err := s.InstallUpdate(); err != nil {
+		s.inform(l10n.T("更新失败"), err.Error())
+	}
+}
+
+func (s *Service) skipVersion(version string) {
+	if _, err := s.cfg.Update(func(c *settings.Config) { c.SkippedUpdate = version }); err != nil {
+		log.Printf("transdict: 记录忽略的更新版本: %v", err)
+	}
+}
+
+func (s *Service) clearSkipped() {
+	if s.cfg.Get().SkippedUpdate == "" {
+		return
+	}
+	if _, err := s.cfg.Update(func(c *settings.Config) { c.SkippedUpdate = "" }); err != nil {
+		log.Printf("transdict: 清除忽略的更新版本: %v", err)
+	}
 }
 
 // inform shows one panel with one way to close it.
 func (s *Service) inform(title, body string) {
 	dialog := s.wails.Dialog.Info().SetTitle(title).SetMessage(body)
-	dialog.AddButton(l10n.T("好"))
-	dialog.Show()
-}
-
-// ask offers the release page when there is one to offer. The link comes from
-// the manifest, so nothing here has to know where the builds live.
-func (s *Service) ask(title, body, link string) {
-	dialog := s.wails.Dialog.Info().SetTitle(title).SetMessage(body)
-	if link != "" {
-		dialog.AddButton(l10n.T("打开发布页")).OnClick(func() {
-			_ = s.wails.Browser.OpenURL(link)
-		})
-	}
 	dialog.AddButton(l10n.T("好"))
 	dialog.Show()
 }

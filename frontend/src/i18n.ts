@@ -286,8 +286,8 @@ const en: Record<string, string> = {
   '一个 JSON 文档，写明最新版本号与下载地址；GitHub 的 Releases API 直接可用。':
     'A JSON document naming the newest version and where to get it; a GitHub Releases API URL works as it is.',
   '自动检查应用更新': 'Automatically check for updates',
-  '只在发现新版本时提示；地址留空时使用官方 GitHub 发布源。':
-    'Only a newer release produces a notice; an empty address uses the official GitHub release feed.',
+  '启动时和运行期间定时检查；发现新版本时询问是否安装，也可忽略该版本。':
+    'Checks at launch and periodically while running; a newer release asks whether to install it, and can be skipped.',
   '包括 Beta 版本': 'Include beta versions',
   '抢先体验新功能，但可能不稳定':
     'Get new features early, though they may be unstable',
@@ -297,6 +297,12 @@ const en: Record<string, string> = {
   '正在下载更新…': 'Downloading update…',
   '正在下载更新… {n}%': 'Downloading update… {n}%',
   '打开发布页': 'Open release page',
+  '忽略此版本': 'Skip this version',
+  '已忽略 {v} 的自动提示': 'Automatic notices for {v} are off',
+  '已忽略 {v} 的自动更新提示': 'Automatic update notices for {v} are off',
+  '取消忽略': 'Stop skipping',
+  '自动更新会替换当前应用；未签名版本可能需要重新授予录屏与辅助功能权限。':
+    'An update replaces the app in place; an unsigned build may need Screen Recording and Accessibility permission again.',
   '当前版本 {v}': 'Version {v}',
   '检查更新…': 'Checking for updates…',
   '发现新版本 {v}（当前 {c}）': 'Version {v} is available (you have {c})',
