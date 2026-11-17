@@ -37,6 +37,17 @@ func (p *permissionAsk) demand(s *Service) {
 	}
 }
 
+// request is what the settings page's 请求权限 button calls: it asks the
+// operating system directly instead of waiting for a failed capture to do it.
+// macOS only lists an app in the two panes after it has asked, which is why
+// this button exists rather than only a shortcut to System Settings.
+func (p *permissionAsk) request() {
+	p.mu.Lock()
+	p.prompted = true
+	p.mu.Unlock()
+	p.prompt()
+}
+
 // step is the whole policy, kept apart from the acting so it can be read and
 // tested on its own. It is atomic because two presses in a row must not stack
 // two system prompts.

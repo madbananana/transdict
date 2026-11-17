@@ -77,7 +77,69 @@ func stageFromImage(dmg, target string) (string, error) {
 		_ = os.RemoveAll(staged)
 		return "", fmt.Errorf("复制应用失败：%s", firstLine(out, err))
 	}
+	signStaged(staged)
 	return staged, nil
+}
+
+// signStaged gives the downloaded bundle this machine's code identity. macOS
+// ties Screen Recording and Accessibility to that identity, so replacing an
+// adhoc build with another adhoc build loses both grants on every update. A
+// Developer ID build from CI is already stable and is left alone; a machine
+// with no signing identity keeps the download as it is.
+func signStaged(app string) {
+	if strings.Contains(codeSignature(app), "Authority=Developer ID Application") {
+		return
+	}
+	identity := signingIdentity()
+	if identity == "" {
+		log.Printf("transdict: 没有可用的签名证书，更新后需要在系统设置里重新授权")
+		return
+	}
+	out, err := exec.Command("/usr/bin/codesign", "--force", "--deep", "--sign", identity,
+		"--identifier", "app.transdict.desktop", app).CombinedOutput()
+	if err != nil {
+		log.Printf("transdict: 更新包签名失败，更新后可能需要重新授权: %s", firstLine(out, err))
+		return
+	}
+	log.Printf("transdict: 已用 %q 签名更新包，以保留系统授权", identity)
+}
+
+func codeSignature(app string) string {
+	out, _ := exec.Command("/usr/bin/codesign", "-dvvv", app).CombinedOutput()
+	return string(out)
+}
+
+// signingIdentity prefers the identity a release would ship with, then the
+// development certificate Xcode installs. The first of either is enough to keep
+// the designated requirement stable across updates.
+func signingIdentity() string {
+	out, err := exec.Command("/usr/bin/security", "find-identity", "-v", "-p", "codesigning").Output()
+	if err != nil {
+		return ""
+	}
+	var development, developerID string
+	for _, line := range strings.Split(string(out), "\n") {
+		start := strings.IndexByte(line, '"')
+		end := strings.LastIndexByte(line, '"')
+		if start < 0 || end <= start {
+			continue
+		}
+		name := line[start+1 : end]
+		switch {
+		case strings.HasPrefix(name, "Developer ID Application:"):
+			if developerID == "" {
+				developerID = name
+			}
+		case strings.HasPrefix(name, "Apple Development:"):
+			if development == "" {
+				development = name
+			}
+		}
+	}
+	if developerID != "" {
+		return developerID
+	}
+	return development
 }
 
 func appInImage(mount, target string) (string, error) {

@@ -1299,12 +1299,23 @@ function Permissions() {
     return () => window.removeEventListener('focus', load)
   }, [])
 
-  const row = (name: string, ok: boolean | undefined, pane: string, icon: IconName) => (
+  // macOS only lists an app in these panes after it has asked; the prompt is
+  // what registers Transdict, so the row offers that before the pane shortcut.
+  const request = (kind: 'screen' | 'access') => {
+    void Service.RequestPermission(kind).then(setState).catch(() => undefined)
+  }
+
+  const row = (name: string, ok: boolean | undefined, pane: string, icon: IconName, kind: 'screen' | 'access') => (
     <div className="actionrow prow" key={pane}>
       <SettingGlyph name={icon} />
       <span className="pname">{name}</span>
       <span className={`dot${ok === false ? ' bad' : ok ? '' : ' off'}`} />
       <span className={ok === false ? 'miss' : 'byline'}>{ok ? t('已授权') : t('未授权')}</span>
+      {ok === false && (
+        <button className="tiny" onClick={() => request(kind)}>
+          {t('请求权限')}
+        </button>
+      )}
       <button className="tiny" onClick={() => void Service.OpenPermission(pane)}>
         {t('打开系统设置')}
       </button>
@@ -1314,10 +1325,10 @@ function Permissions() {
   return (
     <div className="group">
       <h4>{t('权限')}</h4>
-      {row(t('屏幕录制'), state?.screenRecording, 'screen', 'window')}
-      {row(t('辅助功能'), state?.accessibility, 'access', 'select')}
+      {row(t('屏幕录制'), state?.screenRecording, 'screen', 'window', 'screen')}
+      {row(t('辅助功能'), state?.accessibility, 'access', 'select', 'access')}
       <p className="noteline withaction">
-        <span>{t('划词、取词与截图依赖这两项授权；在系统设置里改完，需要重启 Transdict 才生效。')}</span>
+        <span>{t('先点「请求权限」让系统登记 Transdict；如果列表里仍然没有，点「打开系统设置」，用 + 添加 /Applications/Transdict.app。改完需要重启 Transdict 才生效。')}</span>
         {state && (!state.screenRecording || !state.accessibility) && (
           <button className="tiny" onClick={() => void Service.Restart()}>{t('重启 Transdict')}</button>
         )}

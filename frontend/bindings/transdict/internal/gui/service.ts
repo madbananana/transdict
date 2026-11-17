@@ -594,6 +594,16 @@ export function ReplaceWithText(text: string): $CancellablePromise<void> {
 }
 
 /**
+ * RequestPermission asks the operating system for one grant and answers the
+ * state after the prompt. The two macOS panes only show an app after it has
+ * asked (or the user adds it by hand), so 隐私 → 权限 needs a button that makes
+ * that request instead of only opening the pane.
+ */
+export function RequestPermission(name: string): $CancellablePromise<$models.PermissionState> {
+    return $Call.ByID(873077854, name);
+}
+
+/**
  * Restart relaunches the app so macOS re-reads the two grants. A checkbox
  * change is only honoured by a fresh process, and the settings page cannot know
  * when the user has finished in System Settings, so it offers the step.

@@ -511,7 +511,10 @@ const en: Record<string, string> = {
   '辅助功能': 'Accessibility',
   '已授权': 'Granted',
   '未授权': 'Not granted',
+  '请求权限': 'Request Permission',
   '打开系统设置': 'Open System Settings',
+  '先点「请求权限」让系统登记 Transdict；如果列表里仍然没有，点「打开系统设置」，用 + 添加 /Applications/Transdict.app。改完需要重启 Transdict 才生效。':
+    'Choose Request Permission first so macOS registers Transdict; if it still is not listed, use Open System Settings and add /Applications/Transdict.app with +. Restart Transdict afterwards.',
   '划词、取词与截图依赖这两项授权；在系统设置里改完，需要重启 Transdict 才生效。':
     'Selection lookup, pointer lookup and screenshot rely on these two grants; restart Transdict after changing them in System Settings.',
   '重启 Transdict': 'Restart Transdict',

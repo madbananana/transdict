@@ -24,6 +24,20 @@ func (s *Service) Permissions() PermissionState {
 	}
 }
 
+// RequestPermission asks the operating system for one grant and answers the
+// state after the prompt. The two macOS panes only show an app after it has
+// asked (or the user adds it by hand), so 隐私 → 权限 needs a button that makes
+// that request instead of only opening the pane.
+func (s *Service) RequestPermission(name string) PermissionState {
+	switch name {
+	case "screen":
+		askScreen.request()
+	case "access":
+		askTrust.request()
+	}
+	return s.Permissions()
+}
+
 // OpenPermission opens the system pane that holds one of the checkboxes. The
 // app cannot flip it: macOS only honours a change after a relaunch, which is
 // why the page says so beside the button.
