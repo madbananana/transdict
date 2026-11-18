@@ -68,7 +68,6 @@ func TestYoudaoRecognizeMapsBlocks(t *testing.T) {
 
 	impl, err := settingsProviderForOCR(settings.Provider{
 		Kind: "youdaoocr", AppID: "APPID", Secret: "SECRET", BaseURL: srv.URL,
-		Extra: map[string]string{"docType": "jpg"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +86,8 @@ func TestYoudaoRecognizeMapsBlocks(t *testing.T) {
 	if v := form.Get("curtime"); v != "1700000000" {
 		t.Fatalf("curtime = %q", v)
 	}
-	if v := form.Get("docType"); v != "jpg" {
+	// The crop is always a PNG, so the image type is not a setting.
+	if v := form.Get("docType"); v != "png" {
 		t.Fatalf("docType = %q", v)
 	}
 	q := form.Get("q")

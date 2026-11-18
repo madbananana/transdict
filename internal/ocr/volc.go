@@ -37,7 +37,7 @@ func init() {
 		Note: " ve-OCR 通用文字识别 (general_text)，Bearer 令牌由控制台申请",
 		Fields: []settings.Field{
 			{Key: settings.FieldAPIKey, Label: "Access Token", Secret: true, Required: true},
-			{Key: settings.FieldBaseURL, Label: "接口地址（可选覆盖）", Placeholder: volcEndpoint},
+			{Key: settings.FieldBaseURL, Label: "接口地址（可选覆盖）", Placeholder: volcEndpoint, Advanced: true},
 		},
 		Default: settings.Provider{BaseURL: volcEndpoint},
 	}, func(p settings.Provider) (Provider, error) {

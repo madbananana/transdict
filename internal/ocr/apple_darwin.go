@@ -277,7 +277,6 @@ import (
 // every Mac install.
 type appleVision struct {
 	IncludeBarcode bool
-	LangHint       string
 }
 
 func init() {
@@ -286,18 +285,16 @@ func init() {
 		Note: "系统自带 · 离线 · 无需密钥 · 附带二维码识别",
 		Free: true,
 		Fields: []settings.Field{
-			{Key: "langHint", Label: "语言提示（可选）", Placeholder: "zh-Hans / en / ja / ko …"},
-			{Key: "includeBarcode", Label: "无文字时提取二维码/条码", Placeholder: "留空=开启，0=关闭"},
+			// The recognition language comes from the app's own language
+			// setting, so Vision does not need a second hint of its own.
+			{Key: "includeBarcode", Label: "无文字时提取二维码/条码", Placeholder: "留空=开启，0=关闭", Advanced: true},
 		},
 	}, func(p settings.Provider) (Provider, error) {
 		include := true
 		if v := strings.ToLower(strings.TrimSpace(p.Extra["includeBarcode"])); v == "0" || v == "false" || v == "off" {
 			include = false
 		}
-		return &appleVision{
-			IncludeBarcode: include,
-			LangHint:       strings.TrimSpace(p.Extra["langHint"]),
-		}, nil
+		return &appleVision{IncludeBarcode: include}, nil
 	})
 }
 
@@ -352,10 +349,7 @@ func (a *appleVision) Recognize(ctx context.Context, png []byte) ([]Block, error
 		return nil, err
 	}
 
-	hint := visionLang(a.LangHint)
-	if h := LangFromContext(ctx); h != "" {
-		hint = visionLang(h)
-	}
+	hint := visionLang(LangFromContext(ctx))
 
 	var cHint *C.char
 	if hint != "" {

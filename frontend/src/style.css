@@ -2972,65 +2972,136 @@ button.close:hover {
   gap: 8px;
 }
 
-/* 关于 opens with the app itself: the icon is the only artwork in settings, so
-   it carries the page the way a Mac About box does. */
-/* 关于 is EasyDict's About box on a white card: 100pt logo, the name at 35pt,
-   then a single row of three links. It sits centred in a 300pt window. */
+/* 关于 is the app's own page: the icon, the name and version, then one row per
+   destination. It is a card, not a form — every row carries a caption saying
+   what it opens, so the page reads as a map of the project. */
 .about {
   flex: 1 1 auto;
   min-height: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  gap: 30px;
-  padding: 8px 32px;
+  padding: 34px 32px;
+}
+
+.aboutcard {
+  width: min(560px, 100%);
+  padding: 28px 28px 20px;
+  background: var(--aux-card);
+  border: 1px solid var(--aux-stroke);
+  border-radius: 18px;
+}
+
+.abouthero {
+  display: flex;
+  align-items: center;
+  gap: 20px;
 }
 
 .abouticon {
   flex: 0 0 auto;
-  width: 100px;
-  height: 100px;
-  border-radius: 22px;
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
+  width: 84px;
+  height: 84px;
+  border-radius: 19px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32), 0 1px 1px rgba(0, 0, 0, 0.4);
 }
 
-.aboutcol {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+.aboutnames {
   min-width: 0;
 }
 
-.aboutcol h2 {
-  margin: 0 0 3px;
-  font-size: 35px;
-  font-weight: 500;
-  letter-spacing: -0.015em;
+.aboutnames h2 {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 
-.aboutversion {
-  margin: 0 0 29px;
+.abouttagline {
+  margin: 4px 0 10px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.aboutmeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aboutversion,
+.aboutplatform {
+  padding: 2px 9px;
+  font-size: 11px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--aux-stroke);
+  color: var(--text-dim);
+}
+
+.aboutrows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 22px;
+}
+
+.aboutrow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  text-align: left;
+  color: inherit;
+}
+
+.aboutrow:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.aboutrow:disabled {
+  opacity: 0.6;
+}
+
+.aboutrowicon {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--accent);
+}
+
+.aboutrowtext {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.aboutrowtext strong {
   font-size: 13px;
+  font-weight: 500;
+}
+
+.aboutrowtext em {
+  font-size: 11.5px;
+  font-style: normal;
   color: var(--text-faint);
 }
 
 .aboutcopyright {
-  margin: 0 0 20px;
+  margin: 20px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--aux-stroke);
   font-size: 11px;
   color: var(--text-faint);
-}
-
-.aboutlinks {
-  display: flex;
-  gap: 15px;
-}
-
-.aboutlinks button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 12px;
-  font-size: 12px;
 }
 
 .aboutack {
@@ -3044,10 +3115,12 @@ button.close:hover {
 }
 
 .aboutackcard {
-  width: min(420px, calc(100% - 80px));
+  width: min(440px, calc(100% - 80px));
   padding: 18px 20px;
-  background: var(--bg-elev);
-  border: 1px solid var(--card-stroke);
+  /* The window palette, not the panel's translucent --bg-elev: on the settings
+     window's own background a see-through card reads as overlapping text. */
+  background: var(--aux-bg);
+  border: 1px solid var(--aux-stroke);
   border-radius: 12px;
   box-shadow: var(--shadow);
 }
@@ -3059,6 +3132,31 @@ button.close:hover {
 
 .aboutackcard .btnrow {
   margin-top: 12px;
+}
+
+.aboutacklist {
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aboutacklist li {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 12px;
+}
+
+.aboutacklist li strong {
+  font-weight: 500;
+}
+
+.aboutacklist li span {
+  font-size: 11.5px;
+  color: var(--text-faint);
 }
 
 .noteline {
@@ -3120,6 +3218,59 @@ button.close:hover {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* 高级设置 folds the endpoints, model lists and extra instructions that every
+   service used to show at once. The count says how many of them carry a value,
+   so a configured-but-hidden field is not forgotten. */
+.svcadv {
+  border: 1px solid var(--stroke);
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.05);
+}
+
+.svcadv > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.svcadv > summary::-webkit-details-marker {
+  display: none;
+}
+
+.svcadv > summary::before {
+  content: '›';
+  font-size: 14px;
+  line-height: 1;
+  transition: transform 0.12s ease;
+}
+
+.svcadv[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.svcadv .advcount {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--tint-accent);
+  color: var(--accent);
+  font-size: 10.5px;
+  text-align: center;
+}
+
+.svcadvbody {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 2px 10px 10px;
 }
 
 /* 支持的模型's 从云端获取模型 button sits under the box it fills. */
@@ -4470,13 +4621,18 @@ html.ocr-window #root {
 /* ---------- 划词查询图标 ---------- */
 
 /* The window is transparent and only the round button paints; the base body
- * gradient would otherwise fill the 40×40 box with a dark rectangle. */
+ * gradient would otherwise fill the box with a dark square. The class is set in
+ * index.html before the app mounts, so even the first frame is transparent. */
 html.qicon-window,
 html.qicon-window body,
 html.qicon-window #root {
   background: transparent;
 }
 
+/* The button fills the window exactly: the window is the click target, so any
+ * transparent margin would swallow clicks meant for the app underneath. All of
+ * the depth therefore lives inside the circle — a bright top edge and a dark
+ * bottom rim — because an outer shadow would be clipped by the window bounds. */
 .qicon {
   width: 100%;
   height: 100%;
@@ -4485,20 +4641,33 @@ html.qicon-window #root {
   padding: 0;
   border-radius: 50%;
   border: 0;
-  background: linear-gradient(180deg, #4a86f7, #2f66f5);
+  background:
+    radial-gradient(120% 120% at 30% 16%, rgba(255, 255, 255, 0.38), rgba(255, 255, 255, 0) 48%),
+    linear-gradient(180deg, #5f96ff 0%, #3c74f6 52%, #2c58e0 100%);
   color: #fff;
-  box-shadow: 0 2px 6px rgba(24, 60, 160, 0.35);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+    inset 0 -3px 7px rgba(12, 34, 110, 0.35);
   cursor: pointer;
 }
 
 .qicon:hover {
-  background: linear-gradient(180deg, #5b93ff, #3a70f7);
-  color: #fff;
+  background:
+    radial-gradient(120% 120% at 30% 16%, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0) 48%),
+    linear-gradient(180deg, #6ea3ff 0%, #4a80f8 52%, #3663e6 100%);
+}
+
+.qicon:active {
+  background:
+    radial-gradient(120% 120% at 30% 16%, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0) 48%),
+    linear-gradient(180deg, #3f74ef 0%, #3363e0 52%, #2a50c9 100%);
 }
 
 .qicon svg {
-  width: 15px;
-  height: 15px;
+  width: 17px;
+  height: 17px;
+  filter: drop-shadow(0 1px 1px rgba(10, 30, 90, 0.35));
 }
 
 /* OCR 窗口: EasyDict puts the picture, the lines it found and the merged text

@@ -36,7 +36,7 @@ func init() {
 		Note: "令牌放 APIKey（X-Ca-Key 头），表单带 trans_type；主要支持 中/英/日/韩 互译",
 		Fields: []settings.Field{
 			{Key: settings.FieldAPIKey, Label: "令牌 (X-Ca-Key)", Secret: true, Required: true},
-			{Key: settings.FieldBaseURL, Label: "接口地址（可留空）", Placeholder: caiyunEndpoint},
+			{Key: settings.FieldBaseURL, Label: "接口地址（可留空）", Placeholder: caiyunEndpoint, Advanced: true},
 		},
 	}, func(p settings.Provider) (Provider, error) {
 		return &caiyun{

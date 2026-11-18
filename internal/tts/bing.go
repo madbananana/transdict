@@ -102,7 +102,7 @@ func init() {
 		Note: "免密钥，微软神经网络语音，英式英语用 en-GB",
 		Free: true,
 		Fields: []settings.Field{
-			{Key: settings.FieldBaseURL, Label: "接口地址（可选）", Placeholder: bingTranslator},
+			{Key: settings.FieldBaseURL, Label: "接口地址（可选）", Placeholder: bingTranslator, Advanced: true},
 		},
 		Default: settings.Provider{Enabled: false},
 	}, func(p settings.Provider) (Provider, error) {

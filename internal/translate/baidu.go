@@ -38,7 +38,7 @@ func init() {
 		Fields: []settings.Field{
 			{Key: settings.FieldAppID, Label: "应用ID (appid)", Required: true},
 			{Key: settings.FieldAPIKey, Label: "密钥 (key)", Secret: true, Required: true},
-			{Key: settings.FieldBaseURL, Label: "接口地址（可留空）", Placeholder: baiduEndpoint},
+			{Key: settings.FieldBaseURL, Label: "接口地址（可留空）", Placeholder: baiduEndpoint, Advanced: true},
 		},
 		Default: settings.Provider{APIKey: "", AppID: ""},
 	}, func(p settings.Provider) (Provider, error) {

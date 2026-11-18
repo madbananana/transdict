@@ -518,6 +518,13 @@ export interface Field {
      * switch or lists the variables a prompt accepts.
      */
     "note"?: string;
+
+    /**
+     * Advanced keeps a field out of the form's first view: the settings page
+     * shows what a service needs to work and folds the rest (endpoints, model
+     * lists, extra instructions) under 高级设置.
+     */
+    "advanced"?: boolean;
 }
 
 /**

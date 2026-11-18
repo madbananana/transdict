@@ -34,7 +34,7 @@ func init() {
 		Note: "APIKey 直接放入 Authorization 头；单段≤5000字",
 		Fields: []settings.Field{
 			{Key: settings.FieldAPIKey, Label: "API Key", Secret: true, Required: true},
-			{Key: settings.FieldBaseURL, Label: "接口地址（可留空）", Placeholder: volcBase},
+			{Key: settings.FieldBaseURL, Label: "接口地址（可留空）", Placeholder: volcBase, Advanced: true},
 		},
 	}, func(p settings.Provider) (Provider, error) {
 		return &volc{

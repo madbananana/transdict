@@ -274,6 +274,12 @@ function Services({ cfg, cats, contexts, run, setStatus }: {
   const of = (kind: string) => types[category]?.find((s) => s.kind === kind)
   const list = showWindow ? [] : listOf(cfg, category)
   const sel = showWindow ? null : list.find((p) => p.id === selected) ?? null
+  // The card shows what a service needs to work; endpoints, model lists and
+  // extra instructions fold under 高级设置 instead of crowding the form.
+  const selFields = sel ? of(sel.kind)?.fields ?? [] : []
+  const selBasic = selFields.filter((f) => !f.advanced)
+  const selAdvanced = selFields.filter((f) => f.advanced)
+  const selAdvancedSet = sel ? selAdvanced.filter((f) => fieldOf(sel, f.key) !== '').length : 0
   const activeWin = contexts.some((c) => c.key === win) ? win : contexts[0]?.key ?? 'main'
   const winName = contexts.find((c) => c.key === activeWin)?.name ?? ''
 
@@ -437,16 +443,18 @@ function Services({ cfg, cats, contexts, run, setStatus }: {
                 run={run}
                 onSave={(v) => run(t('保存…'), () => SettingsService.UpdateProvider({ ...sel, label: v }))}
               />
-              {(of(sel.kind)?.fields ?? []).map((f) => (
-                <div className="fieldpair" key={f.key}>
-                  <ProviderField field={f} value={fieldOf(sel, f.key)} run={run} onSave={(v) => {
-                    run(t('保存…'), () => SettingsService.UpdateProvider(setField(sel, f.key, v)))
-                  }} />
-                  {f.key === 'supportedModels' && of(sel.kind)?.fetchModels && (
-                    <ModelFetch p={sel} run={run} local={!!of(sel.kind)?.fetchLocalModels} />
-                  )}
-                </div>
-              ))}
+              <ProviderFields p={sel} fields={selBasic} meta={of(sel.kind)} run={run} />
+              {selAdvanced.length > 0 && (
+                <details className="svcadv">
+                  <summary>
+                    {t('高级设置')}
+                    {selAdvancedSet > 0 && <span className="advcount">{selAdvancedSet}</span>}
+                  </summary>
+                  <div className="svcadvbody">
+                    <ProviderFields p={sel} fields={selAdvanced} meta={of(sel.kind)} run={run} />
+                  </div>
+                </details>
+              )}
               {!usable(sel, of(sel.kind)) && requirementOf(sel.kind, of(sel.kind)) === 'key' && (
                 <p className="noteline missingkey">
                   {t('缺少密钥')}：{t('请前往服务官网注册申请个人的 API key。')}
@@ -844,6 +852,30 @@ function ProviderProbe({ id }: { id: string }) {
         </span>
       )}
     </div>
+  )
+}
+
+// ProviderFields renders one block of a service's form. The main card and
+// 高级设置 share it, so a field moves between them by its Advanced flag alone.
+function ProviderFields({ p, fields, meta, run }: {
+  p: Provider
+  fields: Field[]
+  meta?: ServiceType
+  run: (label: string, call: () => Promise<unknown>) => void
+}) {
+  return (
+    <>
+      {fields.map((f) => (
+        <div className="fieldpair" key={f.key}>
+          <ProviderField field={f} value={fieldOf(p, f.key)} run={run} onSave={(v) => {
+            run(t('保存…'), () => SettingsService.UpdateProvider(setField(p, f.key, v)))
+          }} />
+          {f.key === 'supportedModels' && meta?.fetchModels && (
+            <ModelFetch p={p} run={run} local={!!meta.fetchLocalModels} />
+          )}
+        </div>
+      ))}
+    </>
   )
 }
 
@@ -2552,59 +2584,125 @@ function Anki({ cfg, run, setStatus }: {
   )
 }
 
-// About is EasyDict's 关于 page: a 100pt logo, the name, the version and the
-// copyright, then three links — project page, contributors, acknowledgements.
-// It is a card, not a form: the privacy statement has its own tab now.
+// About is the app's own page: the icon, the name and version, then one row per
+// destination — update check, project page, contributors, acknowledgements.
+// Each row says what it opens, so the page reads as a map of the project rather
+// than a row of unlabeled buttons.
 function About({ setStatus }: { setStatus: (text: string) => void }) {
   const [version, setVersion] = useState('')
   const [ack, setAck] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [checkNote, setCheckNote] = useState('')
   useEffect(() => {
     void SettingsService.Version().then((v) => setVersion(v ?? ''))
   }, [])
 
+  // 检查更新 answers in place and only raises the update window when there is
+  // something to install, the same contract the general page's button has.
+  const check = () => {
+    setChecking(true)
+    setCheckNote(t('检查更新…'))
+    void Service.CheckUpdate()
+      .then((r) => {
+        setCheckNote(r?.version
+          ? t('发现新版本 {v}（当前 {c}）', { v: r.version, c: r.current })
+          : t('已是最新版本 {v}', { v: r?.current ?? '' }))
+        if (r?.version) void Service.OpenUpdateWindow()
+      })
+      .catch((e) => setCheckNote(errMsg(e)))
+      .finally(() => setChecking(false))
+  }
+
+  const platform = isMac ? 'macOS' : isWindows ? 'Windows' : 'Linux'
+
   return (
     <div className="about">
-      <img className="abouticon" src="/appicon.png" alt="" width={100} height={100} />
-      <div className="aboutcol">
-        <h2>Transdict</h2>
-        <p className="aboutversion">{version ? t('当前版本 {v}', { v: version }) : ''}</p>
-        <p className="aboutcopyright">Copyright © 2026 Transdict. All rights reserved.</p>
-        <div className="aboutlinks">
-          <button onClick={() => void Service.OpenProjectPage().catch((e) => setStatus(errMsg(e)))}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-              strokeWidth="1.6" strokeLinejoin="round" aria-hidden="true">
-              <path d="M12 3.6l2.5 5.1 5.6.8-4 3.9.9 5.6-5-2.6-5 2.6.9-5.6-4-3.9 5.6-.8z" />
-            </svg>
-            {t('GitHub 项目主页')}
+      <div className="aboutcard">
+        <div className="abouthero">
+          <img className="abouticon" src="/appicon.png" alt="" width={84} height={84} />
+          <div className="aboutnames">
+            <h2>Transdict</h2>
+            <p className="abouttagline">{t('划词翻译、词典与截图 OCR，常驻菜单栏')}</p>
+            <div className="aboutmeta">
+              {version && <span className="aboutversion">{t('版本 {v}', { v: version })}</span>}
+              <span className="aboutplatform">{platform}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="aboutrows">
+          <button className="aboutrow" disabled={checking} onClick={check}>
+            <span className="aboutrowicon">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M20 12a8 8 0 1 1-2.3-5.6" />
+                <path d="M20 4.5V9h-4.5" />
+              </svg>
+            </span>
+            <span className="aboutrowtext">
+              <strong>{t('检查更新')}</strong>
+              <em>{checkNote || t('获取最新版本与更新说明')}</em>
+            </span>
           </button>
-          <button onClick={() => void Service.OpenContributorsPage().catch((e) => setStatus(errMsg(e)))}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-              strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
-              <circle cx="9" cy="8.2" r="2.6" />
-              <circle cx="16.3" cy="9.2" r="2.1" />
-              <path d="M3.6 18.4c0-2.6 2.4-4.3 5.4-4.3s5.4 1.7 5.4 4.3" />
-              <path d="M15.2 14.6c2.6.2 4.8 1.7 4.8 3.8" />
-            </svg>
-            {t('贡献者')}
+          <button className="aboutrow" onClick={() => void Service.OpenProjectPage().catch((e) => setStatus(errMsg(e)))}>
+            <span className="aboutrowicon">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="1.6" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 3.6l2.5 5.1 5.6.8-4 3.9.9 5.6-5-2.6-5 2.6.9-5.6-4-3.9 5.6-.8z" />
+              </svg>
+            </span>
+            <span className="aboutrowtext">
+              <strong>{t('GitHub 项目主页')}</strong>
+              <em>{t('源码、问题反馈与版本发布')}</em>
+            </span>
           </button>
-          <button onClick={() => setAck(true)}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-              strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M12 3l2.2 1.7 2.8-.2 1 2.6 2.4 1.4-.7 2.7 1.3 2.5-2 1.9-.4 2.8-2.7.6-1.6 2.3-2.6-1-2.6 1-1.6-2.3-2.7-.6-.4-2.8-2-1.9L4.3 12l-.7-2.7L6 7.9l1-2.6 2.8.2z" />
-              <path d="M8.9 12.3l2.1 2.1 4.2-4.3" />
-            </svg>
-            {t('致谢')}
+          <button className="aboutrow" onClick={() => void Service.OpenContributorsPage().catch((e) => setStatus(errMsg(e)))}>
+            <span className="aboutrowicon">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+                <circle cx="9" cy="8.2" r="2.6" />
+                <circle cx="16.3" cy="9.2" r="2.1" />
+                <path d="M3.6 18.4c0-2.6 2.4-4.3 5.4-4.3s5.4 1.7 5.4 4.3" />
+                <path d="M15.2 14.6c2.6.2 4.8 1.7 4.8 3.8" />
+              </svg>
+            </span>
+            <span className="aboutrowtext">
+              <strong>{t('贡献者')}</strong>
+              <em>{t('参与改进 Transdict 的人')}</em>
+            </span>
+          </button>
+          <button className="aboutrow" onClick={() => setAck(true)}>
+            <span className="aboutrowicon">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 3l2.2 1.7 2.8-.2 1 2.6 2.4 1.4-.7 2.7 1.3 2.5-2 1.9-.4 2.8-2.7.6-1.6 2.3-2.6-1-2.6 1-1.6-2.3-2.7-.6-.4-2.8-2-1.9L4.3 12l-.7-2.7L6 7.9l1-2.6 2.8.2z" />
+                <path d="M8.9 12.3l2.1 2.1 4.2-4.3" />
+              </svg>
+            </span>
+            <span className="aboutrowtext">
+              <strong>{t('开源致谢')}</strong>
+              <em>{t('使用的开源项目与系统框架')}</em>
+            </span>
           </button>
         </div>
+
+        <p className="aboutcopyright">Copyright © 2026 Transdict. All rights reserved.</p>
       </div>
 
       {ack && (
-        <div className="aboutack" role="dialog" aria-modal="true" aria-label={t('致谢')}>
+        <div className="aboutack" role="dialog" aria-modal="true" aria-label={t('开源致谢')}>
           <div className="aboutackcard">
-            <h3>{t('致谢')}</h3>
+            <h3>{t('开源致谢')}</h3>
             <p className="noteline">
-              {t('界面基于 Wails 与 React；识别与语言判断使用苹果的 Vision 与自然语言框架；翻译、词典与朗读由你启用的服务提供。')}
+              {t('Transdict 建立在下面这些项目与框架之上：')}
             </p>
+            <ul className="aboutacklist">
+              <li><strong>Wails</strong><span>{t('桌面外壳与窗口管理')}</span></li>
+              <li><strong>React</strong><span>{t('界面')}</span></li>
+              <li><strong>Apple Vision / NaturalLanguage</strong><span>{t('macOS 上的 OCR 与语言识别')}</span></li>
+              <li><strong>Google、有道、百度、腾讯、必应、OpenAI 等</strong><span>{t('翻译、词典与朗读服务')}</span></li>
+            </ul>
+            <p className="noteline">{t('翻译、词典与朗读的结果由你启用的服务提供。')}</p>
             <div className="btnrow">
               <button className="primary tiny" onClick={() => setAck(false)}>{t('好')}</button>
             </div>

@@ -36,7 +36,6 @@ type alibaba struct {
 	accessKeyID string
 	secret      string
 	region      string
-	bucket      string
 	baseURL     string
 	httpc       *http.Client
 }
@@ -44,14 +43,13 @@ type alibaba struct {
 func init() {
 	Register(settings.ServiceType{
 		Kind: "alibaba", Name: "阿里翻译",
-		Note:  "RPC 签名 HMAC-SHA1；AccessKeyId 填应用ID、AccessKeySecret 填密钥；region/bucket 在扩展项",
+		Note:  "RPC 签名 HMAC-SHA1；AccessKeyId 填应用ID、AccessKeySecret 填密钥；地域与接口地址在高级设置",
 		Multi: true,
 		Fields: []settings.Field{
 			{Key: settings.FieldAppID, Label: "AccessKeyId", Required: true},
 			{Key: settings.FieldSecret, Label: "AccessKeySecret", Secret: true, Required: true},
-			{Key: "region", Label: "地域 (region)", Placeholder: alibabaRegionDefault},
-			{Key: "bucket", Label: "Bucket（可选）", Placeholder: ""},
-			{Key: settings.FieldBaseURL, Label: "接口地址（可留空）", Placeholder: alibabaEndpoint},
+			{Key: "region", Label: "地域 (region)", Placeholder: alibabaRegionDefault, Advanced: true},
+			{Key: settings.FieldBaseURL, Label: "接口地址（可留空）", Placeholder: alibabaEndpoint, Advanced: true},
 		},
 		Default: settings.Provider{Extra: map[string]string{"region": alibabaRegionDefault}},
 	}, func(p settings.Provider) (Provider, error) {
@@ -63,7 +61,6 @@ func init() {
 			accessKeyID: strings.TrimSpace(p.AppID),
 			secret:      strings.TrimSpace(p.Secret),
 			region:      region,
-			bucket:      strings.TrimSpace(p.Get("bucket")),
 			baseURL:     strings.TrimSpace(p.BaseURL),
 			httpc:       netp.Client(20 * time.Second),
 		}, nil

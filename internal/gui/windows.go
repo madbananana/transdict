@@ -586,13 +586,19 @@ func (s *Service) ensure(name, url string, width, height int, top bool) applicat
 		BackgroundColour: application.NewRGBA(0, 0, 0, 0),
 		URL:              url,
 		Mac: application.MacWindow{
-			Backdrop: application.MacBackdropTranslucent,
+			// Plain transparency, not the translucent backdrop: a blur layer
+			// behind a 30pt circle shows as a frosted square around it.
+			Backdrop: application.MacBackdropTransparent,
 			TitleBar: application.MacTitleBarHidden,
 		},
 		Windows: application.WindowsWindow{
 			// The button is a utility, not a window the user switches to: it
 			// should never occupy a taskbar button or an Alt-Tab slot.
 			HiddenOnTaskbar: true,
+			// Windows 11 otherwise draws its own frame and drop shadow around a
+			// frameless window, which on a 30pt transparent button shows up as a
+			// grey rounded box behind the circle.
+			DisableFramelessWindowDecorations: true,
 		},
 	}
 	// The 划词查询图标 must survive Spaces and fullscreens: 划词 happens inside

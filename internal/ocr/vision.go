@@ -34,7 +34,7 @@ func init() {
 		Kind: "vision", Name: "视觉大模型", Note: "任意 OpenAI 兼容接口，适合旋转/密集排版的截图",
 		Multi: true,
 		Fields: []settings.Field{
-			{Key: settings.FieldBaseURL, Label: "接口地址", Placeholder: "https://api.openai.com/v1"},
+			{Key: settings.FieldBaseURL, Label: "接口地址", Placeholder: "https://api.openai.com/v1", Advanced: true},
 			{Key: settings.FieldAPIKey, Label: "API Key", Secret: true, Required: true},
 			{Key: settings.FieldModel, Label: "模型", Placeholder: "gpt-4o-mini"},
 		},

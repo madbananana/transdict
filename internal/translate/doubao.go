@@ -39,10 +39,10 @@ func init() {
 		Markdown: false,
 		Models:   []string{doubaoDefaultModel},
 		Fields: []settings.Field{
-			{Key: settings.FieldBaseURL, Label: "接口地址", Placeholder: doubaoDefaultBaseURL},
+			{Key: settings.FieldBaseURL, Label: "接口地址", Placeholder: doubaoDefaultBaseURL, Advanced: true},
 			{Key: settings.FieldAPIKey, Label: "API Key", Secret: true, Required: true},
 			{Key: settings.FieldModel, Label: "模型", Placeholder: doubaoDefaultModel},
-			{Key: settings.FieldSupportedModels, Label: "支持的模型", Placeholder: doubaoDefaultModel},
+			{Key: settings.FieldSupportedModels, Label: "支持的模型", Placeholder: doubaoDefaultModel, Advanced: true},
 			usageStatusField(),
 		},
 		Default: settings.Provider{BaseURL: doubaoDefaultBaseURL, Model: doubaoDefaultModel},

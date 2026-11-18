@@ -74,8 +74,8 @@ func init() {
 				Placeholder: "完整请求 URL，例如 https://api.openai.com/v1/chat/completions"},
 			{Key: settings.FieldAPIKey, Label: "API Key", Secret: true, Required: true},
 			{Key: settings.FieldModel, Label: "模型", Placeholder: "gpt-4o-mini"},
-			{Key: settings.FieldSupportedModels, Label: "支持的模型", Placeholder: "模型名字，多个模型使用逗号（,）分隔"},
-			{Key: settings.FieldPrompt, Label: "附加指令", Text: true},
+			{Key: settings.FieldSupportedModels, Label: "支持的模型", Placeholder: "模型名字，多个模型使用逗号（,）分隔", Advanced: true},
+			{Key: settings.FieldPrompt, Label: "附加指令", Text: true, Advanced: true},
 			reasoningEffortField(),
 			hideThinkField(),
 			customPromptField(),
@@ -102,8 +102,9 @@ var thinkBlock = regexp.MustCompile(`(?is)<think\b[^>]*>.*?(?:</think\s*>|$)`)
 // chat/completions body.
 func reasoningEffortField() settings.Field {
 	return settings.Field{
-		Key:   settings.FieldReasoningEffort,
-		Label: "思考程度",
+		Key:      settings.FieldReasoningEffort,
+		Label:    "思考程度",
+		Advanced: true,
 		Options: []settings.FieldOption{
 			{Value: "", Label: "关闭思考"},
 			{Value: "high", Label: "高"},
@@ -117,8 +118,9 @@ func reasoningEffortField() settings.Field {
 // look like it answered twice.
 func hideThinkField() settings.Field {
 	return settings.Field{
-		Key:   settings.FieldHideThink,
-		Label: "隐藏 <think> 标签内容",
+		Key:      settings.FieldHideThink,
+		Label:    "隐藏 <think> 标签内容",
+		Advanced: true,
 		Options: []settings.FieldOption{
 			{Value: "", Label: "不隐藏"},
 			{Value: "1", Label: "隐藏"},
@@ -128,9 +130,10 @@ func hideThinkField() settings.Field {
 
 func customPromptField() settings.Field {
 	return settings.Field{
-		Key:   settings.FieldEnableCustomPrompt,
-		Label: "使用自定义 Prompt",
-		Note:  "开启后不再使用默认的翻译、句子分析和查单词 Prompt。",
+		Key:      settings.FieldEnableCustomPrompt,
+		Label:    "使用自定义 Prompt",
+		Note:     "开启后不再使用默认的翻译、句子分析和查单词 Prompt。",
+		Advanced: true,
 		Options: []settings.FieldOption{
 			{Value: "", Label: "关闭"},
 			{Value: "1", Label: "开启"},
@@ -144,6 +147,7 @@ func systemPromptField() settings.Field {
 		Label:       "系统 Prompt",
 		Placeholder: "你是一个有用的翻译助手。",
 		Text:        true,
+		Advanced:    true,
 	}
 }
 
@@ -153,6 +157,7 @@ func userPromptField() settings.Field {
 		Label:       "用户 Prompt",
 		Placeholder: "将下面 ${{queryFromLanguage}} 的文本翻译成 ${{queryTargetLanguage}}: ${{queryText}}",
 		Text:        true,
+		Advanced:    true,
 		Note:        "可用变量：${{queryText}}、${{queryFromLanguage}}、${{queryTargetLanguage}}、${{firstLanguage}}。留空时发送查询原文。",
 	}
 }
@@ -187,9 +192,10 @@ func taskField(key, label string) settings.Field {
 // empty means on, as shipped.
 func streamField() settings.Field {
 	return settings.Field{
-		Key:   settings.FieldStream,
-		Label: "启用流式传输",
-		Note:  "如果端点不支持流式响应，请关闭此选项。",
+		Key:      settings.FieldStream,
+		Label:    "启用流式传输",
+		Note:     "如果端点不支持流式响应，请关闭此选项。",
+		Advanced: true,
 		Options: []settings.FieldOption{
 			{Value: "", Label: "开启"},
 			{Value: "0", Label: "关闭"},

@@ -46,7 +46,7 @@ func init() {
 		Note: "免密钥，长文本自动分段拼接",
 		Free: true,
 		Fields: []settings.Field{
-			{Key: settings.FieldBaseURL, Label: "接口地址（可选）", Placeholder: googleTTSEndpoint},
+			{Key: settings.FieldBaseURL, Label: "接口地址（可选）", Placeholder: googleTTSEndpoint, Advanced: true},
 		},
 		Default: settings.Provider{Enabled: true},
 	}, func(p settings.Provider) (Provider, error) {

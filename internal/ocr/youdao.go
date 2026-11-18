@@ -28,7 +28,6 @@ type youdaoOCR struct {
 	AppID     string
 	AppKey    string // same as AppID for the modern 智领 endpoints, kept for clarity
 	AppSecret string
-	DocType   string
 	BaseURL   string
 
 	httpc *http.Client
@@ -52,8 +51,7 @@ func init() {
 		Fields: []settings.Field{
 			{Key: settings.FieldAppID, Label: "应用 ID (AppID)", Required: true},
 			{Key: settings.FieldSecret, Label: "应用密钥 (AppSecret)", Secret: true, Required: true},
-			{Key: "docType", Label: "图片类型", Placeholder: "png（默认）/jpg"},
-			{Key: settings.FieldBaseURL, Label: "接口地址（可选覆盖）", Placeholder: youdaoEndpoint},
+			{Key: settings.FieldBaseURL, Label: "接口地址（可选覆盖）", Placeholder: youdaoEndpoint, Advanced: true},
 		},
 	}, func(p settings.Provider) (Provider, error) {
 		if p.AppID == "" || p.Secret == "" {
@@ -63,14 +61,10 @@ func init() {
 		if base == "" {
 			base = youdaoEndpoint
 		}
-		docType := p.Extra["docType"]
-		if docType == "" {
-			docType = "png"
-		}
 		return &youdaoOCR{
 			AppID: p.AppID, AppKey: p.AppID, AppSecret: p.Secret,
-			DocType: docType, BaseURL: base,
-			httpc: netp.Client(youdaoTimeout),
+			BaseURL: base,
+			httpc:   netp.Client(youdaoTimeout),
 		}, nil
 	})
 }
@@ -89,7 +83,8 @@ func (y *youdaoOCR) Recognize(ctx context.Context, png []byte) ([]Block, error) 
 	form.Set("salt", salt)
 	form.Set("curtime", curtime)
 	form.Set("vk", vk)
-	form.Set("docType", y.DocType)
+	// The crop is always a PNG, so the image type is not a user setting.
+	form.Set("docType", "png")
 	form.Set("vendor", "Youdao")
 	form.Set("action", "auto")
 	form.Set("velocity", "horizontal")

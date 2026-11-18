@@ -40,8 +40,8 @@ func init() {
 		Fields: []settings.Field{
 			{Key: settings.FieldBaseURL, Label: "服务地址", Placeholder: ollamaDefaultBaseURL},
 			{Key: settings.FieldModel, Label: "模型", Placeholder: ollamaDefaultModel},
-			{Key: settings.FieldSupportedModels, Label: "支持的模型", Placeholder: ollamaDefaultModel},
-			{Key: settings.FieldPrompt, Label: "附加指令", Text: true},
+			{Key: settings.FieldSupportedModels, Label: "支持的模型", Placeholder: ollamaDefaultModel, Advanced: true},
+			{Key: settings.FieldPrompt, Label: "附加指令", Text: true, Advanced: true},
 		},
 		Models:  []string{ollamaDefaultModel},
 		Default: settings.Provider{BaseURL: ollamaDefaultBaseURL, Model: ollamaDefaultModel},

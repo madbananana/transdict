@@ -17,9 +17,11 @@ import (
 // it becomes the only trigger, so a selection never fires a paid service by
 // itself.
 const (
-	// queryIconSize is EasyDict's 23-point pop button plus a little, so the
-	// magnifier stays legible without sitting on the text like a card.
-	queryIconSize = 26
+	// queryIconSize is EasyDict's 23-point pop button plus room for the glyph
+	// and its edge ring, so the button stays legible without sitting on the
+	// text like a card. The window is exactly this large: anything bigger would
+	// swallow clicks in its transparent margin.
+	queryIconSize = 30
 	// queryIconReach is how far the pointer may travel from the button before it
 	// withdraws — Easydict's expandedRadius. A button that outlives the gesture
 	// that made it is in the way of the next gesture.
@@ -88,7 +90,7 @@ func (s *Service) showQueryIcon(text string, editable bool) {
 		log.Print("transdict: 划词查询图标: 读不到鼠标位置")
 		return
 	}
-	x, y := cursor.X+10, cursor.Y+18
+	x, y := cursor.X+8, cursor.Y+14
 	if bounds, ok := s.displayAt(cursor); ok {
 		x, y = clampToDisplay(bounds, x, y, queryIconSize, queryIconSize)
 	}

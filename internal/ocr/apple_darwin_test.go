@@ -25,8 +25,10 @@ func TestAppleVisionRegistered(t *testing.T) {
 	if !m.Free {
 		t.Fatal("apple Vision must be flagged Free — it needs no key")
 	}
-	if len(m.Fields) != 2 {
-		t.Fatalf("expected the two optional fields, got %d", len(m.Fields))
+	// Only the barcode switch is configurable: the recognition language comes
+	// from the app's own language setting, not from a second hint here.
+	if len(m.Fields) != 1 || m.Fields[0].Key != "includeBarcode" {
+		t.Fatalf("expected only the barcode switch, got %+v", m.Fields)
 	}
 }
 

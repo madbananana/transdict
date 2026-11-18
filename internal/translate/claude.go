@@ -43,10 +43,10 @@ func init() {
 		Prompt:   true,
 		Fields: []settings.Field{
 			{Key: settings.FieldAPIKey, Label: "API Key", Secret: true, Required: true},
-			{Key: settings.FieldBaseURL, Label: "接口地址", Placeholder: claudeDefaultBaseURL},
+			{Key: settings.FieldBaseURL, Label: "接口地址", Placeholder: claudeDefaultBaseURL, Advanced: true},
 			{Key: settings.FieldModel, Label: "模型", Placeholder: claudeDefaultModel},
-			{Key: settings.FieldSupportedModels, Label: "支持的模型", Placeholder: "claude-sonnet-4-5, claude-opus-4-1, claude-haiku-4-5"},
-			{Key: settings.FieldPrompt, Label: "附加指令", Text: true},
+			{Key: settings.FieldSupportedModels, Label: "支持的模型", Placeholder: "claude-sonnet-4-5, claude-opus-4-1, claude-haiku-4-5", Advanced: true},
+			{Key: settings.FieldPrompt, Label: "附加指令", Text: true, Advanced: true},
 		},
 		Models:  []string{"claude-sonnet-4-5", "claude-opus-4-1", "claude-haiku-4-5"},
 		Default: settings.Provider{BaseURL: claudeDefaultBaseURL, Model: claudeDefaultModel},

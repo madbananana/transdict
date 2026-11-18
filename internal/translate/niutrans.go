@@ -30,7 +30,7 @@ func init() {
 		Note: "apikey 作为表单字段；返回 tgt_text，支持 400+ 语种",
 		Fields: []settings.Field{
 			{Key: settings.FieldAPIKey, Label: "API Key", Secret: true, Required: true},
-			{Key: settings.FieldBaseURL, Label: "接口地址（可留空）", Placeholder: niutransEndpoint},
+			{Key: settings.FieldBaseURL, Label: "接口地址（可留空）", Placeholder: niutransEndpoint, Advanced: true},
 		},
 	}, func(p settings.Provider) (Provider, error) {
 		return &niutrans{

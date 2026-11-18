@@ -37,7 +37,7 @@ func init() {
 		Note: "免密钥，词典词条发音；长句会换用下一个朗读服务",
 		Free: true,
 		Fields: []settings.Field{
-			{Key: settings.FieldBaseURL, Label: "接口地址（可选）", Placeholder: youdaoDictvoice},
+			{Key: settings.FieldBaseURL, Label: "接口地址（可选）", Placeholder: youdaoDictvoice, Advanced: true},
 		},
 		Default: settings.Provider{Enabled: true},
 	}, func(p settings.Provider) (Provider, error) {

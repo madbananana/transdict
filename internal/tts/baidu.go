@@ -64,7 +64,7 @@ func init() {
 		Fields: []settings.Field{
 			{Key: settings.FieldAPIKey, Label: "API Key", Required: true},
 			{Key: settings.FieldSecret, Label: "Secret Key", Secret: true, Required: true},
-			{Key: settings.FieldBaseURL, Label: "接口地址（可选）", Placeholder: baiduTTSURL},
+			{Key: settings.FieldBaseURL, Label: "接口地址（可选）", Placeholder: baiduTTSURL, Advanced: true},
 		},
 	}, func(p settings.Provider) (Provider, error) {
 		base := strings.TrimRight(p.BaseURL, "/")

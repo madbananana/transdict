@@ -57,9 +57,9 @@ func init() {
 		Fields: []settings.Field{
 			{Key: settings.FieldAppID, Label: "SecretId", Secret: true, Required: true},
 			{Key: settings.FieldSecret, Label: "SecretKey", Secret: true, Required: true},
-			{Key: "region", Label: "地域", Placeholder: "ap-guangzhou（默认）"},
-			{Key: settings.FieldModel, Label: "接口", Placeholder: "GeneralBasicOCR / GeneralAccurateOCR"},
-			{Key: settings.FieldBaseURL, Label: "接口地址（可选覆盖）", Placeholder: tencentEndpoint},
+			{Key: "region", Label: "地域", Placeholder: "ap-guangzhou（默认）", Advanced: true},
+			{Key: settings.FieldModel, Label: "接口", Placeholder: "GeneralBasicOCR / GeneralAccurateOCR", Advanced: true},
+			{Key: settings.FieldBaseURL, Label: "接口地址（可选覆盖）", Placeholder: tencentEndpoint, Advanced: true},
 		},
 	}, func(p settings.Provider) (Provider, error) {
 		if p.AppID == "" || p.Secret == "" {

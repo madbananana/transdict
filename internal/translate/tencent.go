@@ -41,8 +41,8 @@ func init() {
 		Fields: []settings.Field{
 			{Key: settings.FieldAppID, Label: "SecretId", Required: true},
 			{Key: settings.FieldSecret, Label: "SecretKey", Secret: true, Required: true},
-			{Key: "region", Label: "地域 (region)", Placeholder: "ap-guangzhou"},
-			{Key: settings.FieldBaseURL, Label: "接口地址（可留空）", Placeholder: tencentEndpoint},
+			{Key: "region", Label: "地域 (region)", Placeholder: "ap-guangzhou", Advanced: true},
+			{Key: settings.FieldBaseURL, Label: "接口地址（可留空）", Placeholder: tencentEndpoint, Advanced: true},
 		},
 		Default: settings.Provider{Extra: map[string]string{"region": "ap-guangzhou"}},
 	}, func(p settings.Provider) (Provider, error) {

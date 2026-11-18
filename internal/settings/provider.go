@@ -119,6 +119,10 @@ type Field struct {
 	// Note is the small line under the box, EasyDict's footnote: it explains a
 	// switch or lists the variables a prompt accepts.
 	Note string `json:"note,omitempty"`
+	// Advanced keeps a field out of the form's first view: the settings page
+	// shows what a service needs to work and folds the rest (endpoints, model
+	// lists, extra instructions) under 高级设置.
+	Advanced bool `json:"advanced,omitempty"`
 }
 
 // FieldOption is one row of a Field picker. Value is what the provider stores,

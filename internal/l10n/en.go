@@ -62,7 +62,7 @@ var en = map[string]string{
 	"OpenAI 兼容接口，文本模型 MiniMax-Text":                 "OpenAI-compatible endpoint, MiniMax-Text",
 	"OpenAI 兼容接口，聚合开源模型":                            "OpenAI-compatible endpoint, aggregated open models",
 	"OpenAI 兼容端点（paas/v4），非官方 Python SDK 协议":        "OpenAI-compatible endpoint (paas/v4), not the official Python SDK protocol",
-	"RPC 签名 HMAC-SHA1；AccessKeyId 填应用ID、AccessKeySecret 填密钥；region/bucket 在扩展项": "HMAC-SHA1 RPC signature; the app ID goes in AccessKeyId and the key in AccessKeySecret; region and bucket go in Extra",
+	"RPC 签名 HMAC-SHA1；AccessKeyId 填应用ID、AccessKeySecret 填密钥；地域与接口地址在高级设置": "HMAC-SHA1 RPC signature; the app ID goes in AccessKeyId and the key in AccessKeySecret; region and endpoint are under advanced settings",
 	"Transdict 取词": "Transdict lookup",
 	"Transdict 记录": "Transdict log",
 	"Transdict 设置": "Transdict Settings",

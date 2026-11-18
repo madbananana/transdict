@@ -15,6 +15,12 @@
       } else if (location.hash.indexOf('#/shot') === 0) {
         document.documentElement.dataset.theme = 'dark'
         document.documentElement.classList.add('shot-live')
+      } else if (location.hash.indexOf('#/queryicon') === 0) {
+        // The 划词查询图标 window is transparent; without this the page's own
+        // dark surface paints a square behind the round button until React has
+        // mounted, which on Windows is long enough to see.
+        document.documentElement.dataset.theme = 'dark'
+        document.documentElement.classList.add('qicon-window')
       }
     </script>
     <title>Transdict</title>

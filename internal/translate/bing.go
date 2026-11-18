@@ -65,8 +65,8 @@ func init() {
 		Kind: "bing", Name: "必应翻译",
 		Note: "免密钥；被拒绝（401）时可在下方填写 Cookie Key", Free: true,
 		Fields: []settings.Field{
-			{Key: settings.FieldBaseURL, Label: "接口地址（可留空）", Placeholder: bingAPIURL},
-			{Key: settings.FieldCookie, Label: "Cookie Key（可选）", Secret: true},
+			{Key: settings.FieldBaseURL, Label: "接口地址（可留空）", Placeholder: bingAPIURL, Advanced: true},
+			{Key: settings.FieldCookie, Label: "Cookie Key（可选）", Secret: true, Advanced: true},
 		},
 		Default: settings.Provider{Enabled: true},
 	}, func(p settings.Provider) (Provider, error) {
