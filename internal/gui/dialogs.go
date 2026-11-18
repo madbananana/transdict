@@ -73,11 +73,11 @@ func (s *Service) ImportConfigFile() (string, error) {
 
 // PickBlockedApp asks for an app and answers the row 禁止名单 stores. The panel
 // is the Finder's own 打开 sheet, so a bundle is picked visually instead of
-// typed as a bundle identifier.
+// typed as a bundle identifier; on Windows the same sheet picks the .exe.
 func (s *Service) PickBlockedApp() (settings.BlockedApp, error) {
 	path, err := s.wails.Dialog.OpenFile().
 		SetMessage(l10n.T("选择要禁止划词的应用")).
-		AddFilter(l10n.T("应用"), "*.app").
+		AddFilter(l10n.T("应用"), blockedAppPattern).
 		TreatsFilePackagesAsDirectories(false).
 		PromptForSingleSelection()
 	if err != nil || path == "" {

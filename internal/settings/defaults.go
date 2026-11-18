@@ -755,13 +755,14 @@ func (c Config) Accel(slot string) []string { return c.Shortcuts[slot] }
 
 // BlocksApp reports whether 禁止名单 excludes the frontmost app from 自动划词.
 // An empty bundle id means the system could not tell, so nothing is blocked:
-// silence there would look like the watcher had stopped.
+// silence there would look like the watcher had stopped. Windows identifies an
+// app by its executable name, which the user may have typed in any case.
 func (c Config) BlocksApp(bundle string) bool {
 	if bundle == "" {
 		return false
 	}
 	for _, app := range c.Blocklist {
-		if app.BundleID == bundle {
+		if strings.EqualFold(app.BundleID, bundle) {
 			return true
 		}
 	}

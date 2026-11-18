@@ -7,6 +7,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"transdict/internal/l10n"
+	"transdict/internal/selection"
 	"transdict/internal/settings"
 )
 
@@ -107,13 +108,12 @@ func TestTrayMenuShowsEveryKeyedActionAndThePinTick(t *testing.T) {
 			t.Errorf("菜单缺少 %q", name)
 		}
 	}
-	// 菜单栏图标 and 开关划词翻译 exist where the platform can honour them:
-	// the status-item style is a menu bar concept, and the automatic selection
-	// watcher needs an accessibility read that only the macOS build has.
+	// 菜单栏图标 is a menu bar concept and stays macOS-only; 开关划词翻译 exists
+	// wherever the focused element's selection can be read without side effects.
 	if darwin := runtime.GOOS == "darwin"; darwin != (menu.FindByLabel(l10n.T("菜单栏图标")) != nil) {
 		t.Errorf("菜单栏图标 在 %s 上的出现与否不对", runtime.GOOS)
 	}
-	if darwin := runtime.GOOS == "darwin"; darwin != (menu.FindByLabel(l10n.T("开关划词翻译")) != nil) {
+	if selection.Pollable != (menu.FindByLabel(l10n.T("开关划词翻译")) != nil) {
 		t.Errorf("开关划词翻译 在 %s 上的出现与否不对", runtime.GOOS)
 	}
 }

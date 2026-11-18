@@ -10,6 +10,9 @@ import (
 	"transdict/internal/settings"
 )
 
+// blockedAppPattern is what the picker's file dialog filters on.
+const blockedAppPattern = "*.app"
+
 // readAppBundle turns a path the 禁止名单 panel returned into the row the
 // settings store keeps. A panel can hand back a file inside the bundle, so the
 // nearest .app ancestor is the app the user actually chose.

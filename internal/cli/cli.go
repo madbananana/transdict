@@ -764,9 +764,10 @@ func trayMenu(cur settings.Config, act trayActions) *application.Menu {
 		keyed(item("输入翻译", act.input), settings.SlotInput),
 		keyed(item("划词翻译", act.selection), settings.SlotSelection),
 	)
-	// Auto selection reads the accessibility API, so the entry only exists on
-	// the platform where the switch does anything.
-	if runtime.GOOS == "darwin" {
+	// Auto selection reads the focused element's selection, so the entry exists
+	// exactly where that read does: the macOS accessibility API and the Windows
+	// UI Automation client.
+	if selection.Pollable {
 		items = append(items, keyed(autoSelect, settings.SlotToggleSelect))
 	}
 	items = append(items,

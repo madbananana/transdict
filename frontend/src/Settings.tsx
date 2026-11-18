@@ -4,7 +4,7 @@
 // here without a frontend edit — the page cannot offer what the code cannot do.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
-  Service, SettingsService, applyTheme, errMsg, isMac, langOption, onCommand, onUpdateChanged, openSystemSettings, openURL, pickableLangs, prettyShortcut, rememberView, restoreView,
+  Service, SettingsService, applyTheme, errMsg, isMac, isWindows, langOption, onCommand, onUpdateChanged, openSystemSettings, openURL, pickableLangs, prettyShortcut, rememberView, restoreView,
   type AnkiMapping, type Config, type Field, type Label, type Lang, type Provider, type ServiceType,
 } from './api'
 import type { Entry } from '../bindings/transdict/internal/history/models.js'
@@ -1548,7 +1548,7 @@ function General({ part, cfg, run, setStatus }: {
 
       <div className="group">
         <h4>{t('自动查询')}</h4>
-        {toggle('mouseSelect', t('划词后自动查询'), t('选中文字即翻译，无需按快捷键（仅 macOS）'))}
+        {(isMac || isWindows) && toggle('mouseSelect', t('划词后自动查询'), t('选中文字即翻译，无需按快捷键'))}
         {toggle('autoQueryOCR', t('图片 OCR 后自动查询'),
           t('关闭后截图只显示识别出的文字，再由「全部重新查询」翻译'))}
         {toggle('autoQueryPaste', t('粘贴后自动查询'), t('粘贴完成后立即翻译，不必按 Enter'))}
@@ -1756,39 +1756,41 @@ function General({ part, cfg, run, setStatus }: {
         </p>
       </div>
 
-      <div className="group">
-        <h4>{t('鼠标划词查询')}</h4>
-        {toggle('autoShowQueryIcon', t('划词后自动显示查询图标'),
-          t('在选区旁显示查询按钮，点击即可翻译'))}
-        {cfg.autoShowQueryIcon && (
-          <>
-            <div className="fields">
-              {choose('queryIconExcludeLang', t('仅当选中文本语言不是'),
-                pickableLangs(langs).map((l) => ({ key: l.code, name: l.name })))}
-            </div>
-            <label className="field slider-field">
-              <span className="fname">
-                <SettingGlyph name="cursor" />
-                {t('最小字符长度')}
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={50}
-                step={10}
-                value={cfg.queryIconMinLength ?? 0}
-                onChange={(e) => patch({ queryIconMinLength: Number(e.target.value) })}
-              />
-              <span className="slider-val">{cfg.queryIconMinLength ?? 0}</span>
-            </label>
-            <p className="noteline">
-              {t('仅当选中文本语言≠指定语言 且 字符数≥该值时显示查询图标。')}
-            </p>
-          </>
-        )}
-        {toggle('queryIconClickOnly', t('点击划词查询图标时才查询（需隐藏主窗口）'),
-          t('划词后不再自动查询，只在点击图标时发问'))}
-      </div>
+      {(isMac || isWindows) && (
+        <div className="group">
+          <h4>{t('鼠标划词查询')}</h4>
+          {toggle('autoShowQueryIcon', t('划词后自动显示查询图标'),
+            t('在选区旁显示查询按钮，点击即可翻译'))}
+          {cfg.autoShowQueryIcon && (
+            <>
+              <div className="fields">
+                {choose('queryIconExcludeLang', t('仅当选中文本语言不是'),
+                  pickableLangs(langs).map((l) => ({ key: l.code, name: l.name })))}
+              </div>
+              <label className="field slider-field">
+                <span className="fname">
+                  <SettingGlyph name="cursor" />
+                  {t('最小字符长度')}
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={50}
+                  step={10}
+                  value={cfg.queryIconMinLength ?? 0}
+                  onChange={(e) => patch({ queryIconMinLength: Number(e.target.value) })}
+                />
+                <span className="slider-val">{cfg.queryIconMinLength ?? 0}</span>
+              </label>
+              <p className="noteline">
+                {t('仅当选中文本语言≠指定语言 且 字符数≥该值时显示查询图标。')}
+              </p>
+            </>
+          )}
+          {toggle('queryIconClickOnly', t('点击划词查询图标时才查询（需隐藏主窗口）'),
+            t('划词后不再自动查询，只在点击图标时发问'))}
+        </div>
+      )}
 
       <div className="group">
         <h4>{t('取词与文本替换')}</h4>
@@ -2189,12 +2191,12 @@ function Blocklist({ cfg, run, setStatus }: {
       await SettingsService.Save({ ...fresh, ...change } as Config)
     })
 
-  if (!isMac) {
+  if (!isMac && !isWindows) {
     return (
       <div className="slist">
         <div className="group">
           <h4>{t('禁止名单')}</h4>
-          <p className="noteline">{t('禁止名单只影响鼠标划词，macOS 之外没有这一触发方式。')}</p>
+          <p className="noteline">{t('禁止名单只影响鼠标划词，当前平台没有自动划词。')}</p>
         </div>
       </div>
     )

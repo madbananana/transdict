@@ -235,6 +235,8 @@ const winLabels: Record<string, string> = {
 }
 
 export const isMac = /Mac|iPhone|iPad/.test(navigator.platform)
+/** isWindows gates the entries that need Windows-only platform work. */
+export const isWindows = /Win/.test(navigator.platform)
 
 /** prettyShortcut renders a Wails accelerator the way the OS would. */
 export function prettyShortcut(accel: string): string {

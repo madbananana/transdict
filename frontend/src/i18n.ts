@@ -487,8 +487,8 @@ const en: Record<string, string> = {
   '划词后不再自动查询，只在点击图标时发问':
     'A selection no longer asks by itself; the icon is the only trigger',
   '主窗口': 'Main window',
-  '选中文字即翻译，无需按快捷键（仅 macOS）':
-    'Translate on select, no shortcut needed (macOS only)',
+  '选中文字即翻译，无需按快捷键':
+    'Translate on select, no shortcut needed',
   '隐藏与原文相同的译文': 'Hide translations equal to the source',
   '源语言与目标语言相同时不再重复显示': 'Nothing is shown twice when source and target match',
   '在程序坞中显示图标': 'Show a Dock tile',
@@ -729,8 +729,8 @@ const en: Record<string, string> = {
   '启动与更新': 'Startup & Updates',
   '收藏的单词': 'Saved Words',
   '读取中…': 'Loading…',
-  '禁止名单只影响鼠标划词，macOS 之外没有这一触发方式。':
-    'The blocklist only affects selection queries, which are macOS-only.',
+  '禁止名单只影响鼠标划词，当前平台没有自动划词。':
+    'The blocklist only affects selection queries, which this platform does not have.',
   '查询的文字与截图只会发送给「服务」页里启用的服务；历史、收藏、生词本与配置保存在本机用户目录，不会上传。':
     'Queried text and screenshots are sent only to the services enabled on the Services page; history, favorites, the notebook and settings stay in your local user folder and are never uploaded.',
   '好': 'OK',
