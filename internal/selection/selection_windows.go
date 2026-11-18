@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf16"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -299,32 +300,32 @@ func newAutomation() (*automation, error) {
 // selection reads the highlighted text of the focused element. ok=false means
 // the answer is unknown — no focused element, or one that carries no text
 // pattern (a browser toolbar, a canvas) — and the watcher must not treat that
-// as "the selection was cleared".
-func (a *automation) selection() (string, bool) {
+// as "the selection was cleared". problem names the failing step for the log.
+func (a *automation) selection() (string, bool, string) {
 	var element unsafe.Pointer
 	if comCall(a.root, uiaGetFocusedElement, uintptr(unsafe.Pointer(&element))) < 0 || element == nil {
-		return "", false
+		return "", false, "读取失败：没有焦点元素"
 	}
 	defer comRelease(element)
 	// A password field must never reach a translation service, and a masked
 	// value would be useless to the user anyway.
 	if a.isPassword(element) {
-		return "", true
+		return "", true, ""
 	}
 	var pattern unsafe.Pointer
 	if comCall(element, uiaGetCurrentPattern, uintptr(uiaTextPatternID),
 		uintptr(unsafe.Pointer(&pattern))) < 0 || pattern == nil {
-		return "", false
+		return "", false, "读取失败：焦点元素不支持文本模式"
 	}
 	defer comRelease(pattern)
 	var ranges unsafe.Pointer
 	if comCall(pattern, uiaGetSelection, uintptr(unsafe.Pointer(&ranges))) < 0 || ranges == nil {
-		return "", false
+		return "", false, "读取失败：无法读取选区"
 	}
 	defer comRelease(ranges)
 	var count int32
 	if comCall(ranges, uiaRangeCount, uintptr(unsafe.Pointer(&count))) < 0 || count <= 0 {
-		return "", true
+		return "", true, ""
 	}
 	var text strings.Builder
 	for i := int32(0); i < count; i++ {
@@ -339,7 +340,7 @@ func (a *automation) selection() (string, bool) {
 		}
 		comRelease(textRange)
 	}
-	return text.String(), true
+	return text.String(), true, ""
 }
 
 // isPassword answers UIA_IsPasswordPropertyId. The VARIANT is cleared by the
@@ -357,10 +358,13 @@ func (a *automation) isPassword(element unsafe.Pointer) bool {
 	return int16(variant[1]) != 0
 }
 
-// uiaAnswer is one read, addressed back to the caller that asked.
+// uiaAnswer is one read, addressed back to the caller that asked. problem names
+// what went wrong when ok is false, so the log can say which step failed
+// instead of the read disappearing without a trace.
 type uiaAnswer struct {
-	text string
-	ok   bool
+	text    string
+	ok      bool
+	problem string
 }
 
 // uiaReader owns the automation client on a thread of its own. COM objects are
@@ -376,6 +380,22 @@ const uiaTimeout = 2 * time.Second
 
 var uia = &uiaReader{reqs: make(chan chan uiaAnswer, 1)}
 
+// note prints a state change once. The watcher reads twice a second, and a log
+// line per tick would bury every other message in the file.
+type logNote struct {
+	last string
+}
+
+func (n *logNote) print(stage string) {
+	if stage == n.last {
+		return
+	}
+	n.last = stage
+	if stage != "" {
+		log.Printf("transdict: 自动划词: %s", stage)
+	}
+}
+
 func (r *uiaReader) start() {
 	r.once.Do(func() { go r.loop() })
 }
@@ -383,19 +403,36 @@ func (r *uiaReader) start() {
 func (r *uiaReader) loop() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	// A dead client still has to answer: leaving the requests unserved would
+	// make every poll sit out the full timeout instead of failing at once.
+	fail := func(why string) {
+		for reply := range r.reqs {
+			reply <- uiaAnswer{problem: why}
+		}
+	}
 	if hr, _, _ := procCoInitializeEx.Call(0, coinitMultithreaded); int32(hr) < 0 {
 		log.Printf("transdict: 自动划词: UI Automation 初始化失败 (0x%08X)", uint32(hr))
+		fail("读取失败：UI Automation 无法初始化")
 		return
 	}
 	defer procCoUninitialize.Call()
 	client, err := newAutomation()
 	if err != nil {
 		log.Printf("transdict: 自动划词: %v", err)
+		fail("读取失败：无法创建 UI Automation 客户端")
 		return
 	}
+	log.Print("transdict: 自动划词: UI Automation 已就绪")
+	var state logNote
+	lastText := ""
 	for reply := range r.reqs {
-		text, ok := client.selection()
-		reply <- uiaAnswer{text: text, ok: ok}
+		text, ok, problem := client.selection()
+		state.print(problem)
+		if text != "" && text != lastText {
+			log.Printf("transdict: 自动划词: 读到选区 %d 字", utf8.RuneCountInString(text))
+		}
+		lastText = text
+		reply <- uiaAnswer{text: text, ok: ok, problem: problem}
 	}
 }
 
@@ -414,6 +451,9 @@ func uiaSelection() (string, bool) {
 	case answer := <-reply:
 		return answer.text, answer.ok
 	case <-time.After(uiaTimeout):
+		uiaTimeoutNote.print("读取超时：目标应用没有响应")
 		return "", false
 	}
 }
+
+var uiaTimeoutNote logNote

@@ -2,6 +2,7 @@ package gui
 
 import (
 	"image"
+	"log"
 	"math"
 	"time"
 	"unicode/utf8"
@@ -79,10 +80,12 @@ func (s *Service) showQueryIcon(text string, editable bool) {
 	}
 	w := s.windowFor(WindowIcon)
 	if w == nil {
+		log.Print("transdict: 划词查询图标: 窗口创建失败")
 		return
 	}
 	cursor, ok := s.cursorDip()
 	if !ok {
+		log.Print("transdict: 划词查询图标: 读不到鼠标位置")
 		return
 	}
 	x, y := cursor.X+10, cursor.Y+18
@@ -110,6 +113,7 @@ func (s *Service) showQueryIcon(text string, editable bool) {
 
 	w.Show()
 	w.SetAlwaysOnTop(true)
+	log.Printf("transdict: 划词查询图标: 显示于 (%d,%d)，%dpt", x, y, queryIconSize)
 	// The button never activates: the user is still in the middle of a sentence
 	// somewhere else, and a click on it must not take the keyboard away.
 	acceptFirstMouseInViews()

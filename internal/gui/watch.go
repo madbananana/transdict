@@ -106,6 +106,7 @@ func (s *Service) autoSelect(text string) {
 	// focused field: it decides whether each result card offers 替换.
 	editable := selection.FocusedElementEditable()
 	icon := queryIconWanted(cfg, text)
+	log.Printf("transdict: 自动划词: 收到选区 %d 字（查询图标=%v）", utf8.RuneCountInString(text), icon)
 	if icon {
 		s.showQueryIcon(text, editable)
 	}
