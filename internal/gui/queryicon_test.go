@@ -16,8 +16,8 @@ func TestIconInReach(t *testing.T) {
 		{"just inside the reach", 120 + queryIconReach - 1, 220, true},
 		{"at the reach", 120 + queryIconReach, 220, true},
 		{"just past it", 120 + queryIconReach + 1, 220, false},
-		{"diagonally inside", 120 + 80, 220 + 80, true},
-		{"diagonally outside", 120 + 90, 220 + 90, false},
+		{"diagonally inside", 120 + 90, 220 + 90, true},
+		{"diagonally outside", 120 + 110, 220 + 110, false},
 	}
 	for _, c := range cases {
 		if got := iconInReach(rect, c.x, c.y); got != c.want {

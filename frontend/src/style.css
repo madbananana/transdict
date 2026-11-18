@@ -4470,11 +4470,11 @@ html.qicon-window #root {
   display: grid;
   place-items: center;
   padding: 0;
-  border-radius: 9px;
+  border-radius: 50%;
   border: 0;
   background: linear-gradient(180deg, #4a86f7, #2f66f5);
   color: #fff;
-  box-shadow: 0 4px 12px rgba(24, 60, 160, 0.38);
+  box-shadow: 0 2px 6px rgba(24, 60, 160, 0.35);
   cursor: pointer;
 }
 
@@ -4484,8 +4484,8 @@ html.qicon-window #root {
 }
 
 .qicon svg {
-  width: 21px;
-  height: 21px;
+  width: 15px;
+  height: 15px;
 }
 
 /* OCR 窗口: EasyDict puts the picture, the lines it found and the merged text

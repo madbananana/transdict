@@ -2,6 +2,7 @@ package selection
 
 import (
 	"context"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -74,6 +75,14 @@ func (t *pointerTracker) release() selectGesture {
 	return selectNone
 }
 
+// A Chromium application builds its accessibility tree on the first request
+// and answers nothing until it is up, so a selection made just after a browser
+// launched reads empty. The retries are short and only run after a failed read:
+// a normal app answers on the first one.
+var readRetryDelay = 250 * time.Millisecond
+
+const readRetryCount = 8
+
 // selectReadDelay is the beat a gesture gets before the selection is read. A
 // click makes the app select the word, so reading at the click itself would
 // still find the previous selection.
@@ -110,10 +119,14 @@ type pointerWatch struct {
 	// wg counts the reads still in flight, so a stopping watcher can wait for
 	// them instead of racing the globals they call into.
 	wg sync.WaitGroup
+	// unreadable names the applications a gesture already failed to read, so
+	// the log names the app instead of repeating the same line on every
+	// selection.
+	unreadable map[string]bool
 }
 
 func newPointerWatch(ctx context.Context, report func(string)) *pointerWatch {
-	return &pointerWatch{ctx: ctx, report: report}
+	return &pointerWatch{ctx: ctx, report: report, unreadable: map[string]bool{}}
 }
 
 func (w *pointerWatch) press(clicks int, shift bool) {
@@ -165,16 +178,65 @@ func (w *pointerWatch) fire(g selectGesture) {
 		if stale || ownForeground() {
 			return
 		}
-		text, ok := readNative()
+		source := FrontmostBundleID()
+		text, ok := w.read(gen)
 		if !ok {
+			w.noteUnreadable(source)
 			return
 		}
-		text = strings.TrimSpace(text)
 		if text == "" {
 			return
 		}
 		w.report(text)
 	}()
+}
+
+// noteUnreadable records, once per application, that a gesture produced no
+// readable selection. The line is what turns "划词没反应" into an application
+// name the next time someone reads the log.
+func (w *pointerWatch) noteUnreadable(id string) {
+	if id == "" {
+		return
+	}
+	w.mu.Lock()
+	seen := w.unreadable[id]
+	w.unreadable[id] = true
+	w.mu.Unlock()
+	if !seen {
+		log.Printf("transdict: 自动划词: 读不到 %s 的选区", id)
+	}
+}
+
+// read answers the gesture: accessibility first, then the browser's scripting
+// interface, which is the only route Safari has. A failed accessibility read is
+// retried briefly, because a Chromium app that has just started builds its
+// accessibility tree on demand and answers nothing until it exists.
+func (w *pointerWatch) read(gen uint64) (string, bool) {
+	if text, ok := readNative(); ok {
+		return strings.TrimSpace(text), true
+	}
+	if preferScript {
+		if text, ok := readScript(); ok {
+			return strings.TrimSpace(text), true
+		}
+	}
+	for range readRetryCount {
+		select {
+		case <-w.ctx.Done():
+			return "", false
+		case <-time.After(readRetryDelay):
+		}
+		w.mu.Lock()
+		stale := gen != w.gen
+		w.mu.Unlock()
+		if stale {
+			return "", false
+		}
+		if text, ok := readNative(); ok {
+			return strings.TrimSpace(text), true
+		}
+	}
+	return "", false
 }
 
 // wait blocks until every read in flight has finished; the watcher's tests use

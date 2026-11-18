@@ -2,6 +2,7 @@ package gui
 
 import (
 	"context"
+	"log"
 	"time"
 	"unicode/utf8"
 
@@ -74,6 +75,7 @@ func (s *Service) syncMouseSelect(cfg settings.Config) {
 		if err == nil || ctx.Err() != nil {
 			return
 		}
+		log.Print("transdict: 自动划词: 事件监听不可用，改用轮询")
 		if err := selection.Watch(ctx, mouseSelectInterval, s.autoSelect); err != nil {
 			s.busy(settings.ContextMain, "自动划词已停止："+err.Error())
 		}

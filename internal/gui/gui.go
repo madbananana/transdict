@@ -145,12 +145,15 @@ type Service struct {
 	// is the timer that takes the icon away if the user ignores it, iconRect is
 	// the button's frame, which the click tap compares against, and iconMoved is
 	// when the pointer was last checked against it. iconScroll is the wheel
-	// movement seen so far, and iconKeyTimer is the beat a plain key press gets.
+	// movement seen so far, iconShown is when the button last appeared (the
+	// grace period that keeps it from vanishing on the first mouse move), and
+	// iconKeyTimer is the beat a plain key press gets.
 	iconText     string
 	iconEditable bool
 	iconHide     *time.Timer
 	iconRect     image.Rectangle
 	iconMoved    time.Time
+	iconShown    time.Time
 	iconScroll   float64
 	iconKeyTimer *time.Timer
 }

@@ -41,6 +41,33 @@ static pid_t frontmostPid(void) {
 	return app.processIdentifier;
 }
 
+// focusedElement answers the app's focused element, waking a sleeping
+// Chromium-family tree when the plain read fails. Those apps build their
+// accessibility tree lazily, and Electron ones (Qoder, VS Code, Slack …) keep it
+// off until a client announces itself with AXManualAccessibility; reading the
+// window list afterwards is what makes the app actually build it before the
+// next focused-element read. Apps that do not know the attribute refuse it,
+// which costs nothing.
+static AXUIElementRef focusedElement(AXUIElementRef app) {
+	AXUIElementRef element = NULL;
+	if (AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute,
+			(CFTypeRef *)&element) == kAXErrorSuccess && element != NULL) {
+		return element;
+	}
+	if (element != NULL) { CFRelease(element); element = NULL; }
+	AXUIElementSetAttributeValue(app, CFSTR("AXManualAccessibility"), kCFBooleanTrue);
+	CFTypeRef windows = NULL;
+	if (AXUIElementCopyAttributeValue(app, kAXWindowsAttribute, &windows) == kAXErrorSuccess && windows != NULL) {
+		CFRelease(windows);
+	}
+	if (AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute,
+			(CFTypeRef *)&element) == kAXErrorSuccess && element != NULL) {
+		return element;
+	}
+	if (element != NULL) CFRelease(element);
+	return NULL;
+}
+
 // AXSelectedText reads the focused UI element of the frontmost application.
 //
 // state: 0 answered (possibly an empty selection, which is a real answer),
@@ -61,10 +88,9 @@ static char *AXSelectedText(int *state) {
 	if (pid <= 0) return NULL;
 	AXUIElementRef app = AXUIElementCreateApplication(pid);
 	if (app == NULL) return NULL;
-	AXUIElementRef element = NULL;
 	CFTypeRef value = NULL;
-	if (AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute,
-			(CFTypeRef *)&element) == kAXErrorSuccess && element != NULL) {
+	AXUIElementRef element = focusedElement(app);
+	if (element != NULL) {
 		if (AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute, &value) == kAXErrorSuccess) {
 			*state = 0;
 		}
@@ -93,9 +119,8 @@ static int AXFocusedValueSettable(void) {
 	AXUIElementRef app = AXUIElementCreateApplication(pid);
 	if (app == NULL) return 0;
 	int settable = 0;
-	AXUIElementRef element = NULL;
-	if (AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute,
-			(CFTypeRef *)&element) == kAXErrorSuccess && element != NULL) {
+	AXUIElementRef element = focusedElement(app);
+	if (element != NULL) {
 		Boolean flag = false;
 		if (AXUIElementIsAttributeSettable(element, kAXValueAttribute, &flag) == kAXErrorSuccess && flag) {
 			settable = 1;
@@ -328,6 +353,7 @@ import "C"
 
 import (
 	"errors"
+	"strings"
 	"unsafe"
 )
 
@@ -352,7 +378,20 @@ func SelectedText() (string, bool) {
 	if state != 0 {
 		return "", false
 	}
-	return text, true
+	return selectionText(text), true
+}
+
+// selectionText drops the object-replacement characters Chromium puts in place
+// of images and other non-text runs. A click on a picture, or on a chat region
+// whose only "text" is its icons, answers with nothing but U+FFFC: that is no
+// selection, and 划词 must not offer to translate it.
+func selectionText(text string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\uFFFC' {
+			return -1
+		}
+		return r
+	}, text)
 }
 
 // Copy synthesizes cmd+C in the frontmost application.

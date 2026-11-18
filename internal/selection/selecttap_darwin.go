@@ -84,6 +84,7 @@ import "C"
 
 import (
 	"context"
+	"log"
 	"sync"
 )
 
@@ -131,6 +132,7 @@ func WatchPointer(ctx context.Context, report func(string)) error {
 		selectTapSinkClear(w)
 		return ErrUnsupported
 	}
+	log.Print("transdict: 自动划词: 事件监听已启动")
 	<-ctx.Done()
 	selectTapSinkClear(w)
 	C.guiStopSelectTap()

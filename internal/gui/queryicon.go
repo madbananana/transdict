@@ -16,11 +16,18 @@ import (
 // it becomes the only trigger, so a selection never fires a paid service by
 // itself.
 const (
-	queryIconSize = 40
+	// queryIconSize is EasyDict's 23-point pop button plus a little, so the
+	// magnifier stays legible without sitting on the text like a card.
+	queryIconSize = 26
 	// queryIconReach is how far the pointer may travel from the button before it
 	// withdraws — Easydict's expandedRadius. A button that outlives the gesture
 	// that made it is in the way of the next gesture.
-	queryIconReach = 120
+	queryIconReach = 140
+	// queryIconGrace keeps the button from vanishing on the first mouse move
+	// after it appears: the pointer is often still travelling when the answer
+	// lands, and a button that is gone by the time the hand reaches it is worse
+	// than no button at all.
+	queryIconGrace = 800 * time.Millisecond
 	// queryIconMoveInterval is the least time between two reach checks, the same
 	// throttle EasyDict puts on mouse-moved events.
 	queryIconMoveInterval = 100 * time.Millisecond
@@ -98,6 +105,7 @@ func (s *Service) showQueryIcon(text string, editable bool) {
 	s.iconEditable = editable
 	s.iconScroll = 0
 	s.iconMoved = time.Time{}
+	s.iconShown = time.Now()
 	s.mu.Unlock()
 
 	w.Show()
@@ -146,8 +154,9 @@ func (s *Service) iconMovedTo(x, y float64) {
 	if due {
 		s.iconMoved = now
 	}
+	grace := now.Sub(s.iconShown) < queryIconGrace
 	s.mu.Unlock()
-	if !active || !due {
+	if !active || !due || grace {
 		return
 	}
 	if !iconInReach(rect, x, y) {

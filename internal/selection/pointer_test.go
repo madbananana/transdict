@@ -157,3 +157,55 @@ func TestPointerWatchDropsAStaleDelayedRead(t *testing.T) {
 		t.Fatalf("reports = %q, want exactly the drag read", got)
 	}
 }
+
+func TestPointerWatchRetriesAColdAccessibilityTree(t *testing.T) {
+	withPoll(t, func() (string, bool) { return "", false }, true, func() bool { return false })
+	shortRetryDelay(t)
+
+	calls := 0
+	readNative = func() (string, bool) {
+		calls++
+		// A Chromium app answers nothing until its accessibility tree exists.
+		if calls < 3 {
+			return "", false
+		}
+		return " cold browser ", true
+	}
+
+	out := &reports{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := newPointerWatch(ctx, out.add)
+	w.fire(selectDrag)
+	w.wait()
+
+	got := out.all()
+	if len(got) != 1 || got[0] != "cold browser" {
+		t.Fatalf("reports = %q, want the selection read once the tree came up", got)
+	}
+}
+
+func TestPointerWatchFallsBackToTheBrowserScript(t *testing.T) {
+	withPoll(t, func() (string, bool) { return "", false }, true, func() bool { return false })
+	shortRetryDelay(t)
+	readScript = func() (string, bool) { return "page words", true }
+
+	out := &reports{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w := newPointerWatch(ctx, out.add)
+	w.fire(selectDrag)
+	w.wait()
+
+	got := out.all()
+	if len(got) != 1 || got[0] != "page words" {
+		t.Fatalf("reports = %q, want the browser script's answer", got)
+	}
+}
+
+func shortRetryDelay(t *testing.T) {
+	t.Helper()
+	original := readRetryDelay
+	readRetryDelay = time.Millisecond
+	t.Cleanup(func() { readRetryDelay = original })
+}
