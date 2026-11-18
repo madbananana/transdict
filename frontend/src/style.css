@@ -114,12 +114,25 @@ html.capture-boot #root {
   color-scheme: dark;
 }
 
+/* shot-live is the transparent marquee: the running screen is the picture, so
+   nothing in the page may paint an opaque sheet over it. */
+html.shot-live,
+html.shot-live body,
+html.shot-live #root {
+  background: transparent;
+  color-scheme: dark;
+}
+
 .capture {
   position: fixed;
   inset: 0;
   overflow: hidden;
   cursor: crosshair;
   background: #000;
+}
+
+.capture.live {
+  background: transparent;
 }
 
 .capture > img {

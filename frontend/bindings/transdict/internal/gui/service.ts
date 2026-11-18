@@ -191,7 +191,9 @@ export function CloseSettings(): $CancellablePromise<void> {
 }
 
 /**
- * Commit receives a selection already converted to image pixel coordinates.
+ * Commit receives a selection already converted to the frame's pixel
+ * coordinates (the frozen overlay) or to the display's points (the live
+ * overlay).
  */
 export function Commit(frameIndex: number, x: number, y: number, w: number, h: number): $CancellablePromise<void> {
     return $Call.ByID(2944510317, frameIndex, x, y, w, h);

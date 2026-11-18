@@ -271,6 +271,7 @@ var en = map[string]string{
 	"未识别到文字":                  "No text recognized",
 	"OCR 结果为空。⚠️ 请手动选择识别语言再次尝试。": "The OCR result is empty. ⚠️ Select the recognition language manually and try again.",
 	"未读取到选区，请在目标应用中重新选择文字":       "No selection found; select the text again in that app",
+	"选区为空": "The selection is empty",
 	"查询中…": "Querying…",
 	"格式应为 ctrl+alt+a 这类组合键": "Use a combination such as ctrl+alt+a",
 	"未知的应用内快捷键":             "Unknown in-app shortcut",

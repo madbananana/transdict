@@ -36,6 +36,10 @@ static CGImageRef td_display_image(CGDirectDisplayID id) {
 	return CGDisplayCreateImageForRect(id, CGRectMake(0, 0, size.width, size.height));
 }
 
+static CGImageRef td_display_rect(CGDirectDisplayID id, double x, double y, double w, double h) {
+	return CGDisplayCreateImageForRect(id, CGRectMake(x, y, w, h));
+}
+
 static size_t td_image_width(CGImageRef img) { return CGImageGetWidth(img); }
 static size_t td_image_height(CGImageRef img) { return CGImageGetHeight(img); }
 static int td_image_is_null(CGImageRef img) { return img == NULL; }
@@ -152,4 +156,28 @@ func copyCFData(data C.CFDataRef) []byte {
 	}
 	defer C.td_data_release(data)
 	return C.GoBytes(C.td_data_bytes(data), C.int(size))
+}
+
+// Region captures one display's rectangle, given in that display's own points —
+// the same space the marquee is drawn in. Only the selected pixels are read and
+// encoded, so a selection is ready far sooner than a whole-display capture.
+func Region(index, x, y, w, h int) ([]byte, error) {
+	if w <= 0 || h <= 0 {
+		return nil, errors.New("capture: empty region")
+	}
+	ids := make([]C.CGDirectDisplayID, 16)
+	n := int(C.td_display_ids(&ids[0], C.size_t(len(ids))))
+	if index < 0 || index >= n {
+		return nil, errors.New("capture: no such display")
+	}
+	img := C.td_display_rect(ids[index], C.double(x), C.double(y), C.double(w), C.double(h))
+	if C.td_image_is_null(img) != 0 {
+		return nil, errors.New("capture: CGDisplayCreateImageForRect returned nil")
+	}
+	defer C.td_image_release(img)
+	png := copyCFData(C.td_encode_png(img))
+	if len(png) == 0 {
+		return nil, errors.New("capture: region encode failed")
+	}
+	return png, nil
 }

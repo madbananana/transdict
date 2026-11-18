@@ -5,11 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <!-- The screenshot overlay paints on top of the frozen frame. Between its
          first paint and the image arriving, it must be black like the window,
-         never the light theme's paper colour; its own chrome is dark too. -->
+         never the light theme's paper colour; its own chrome is dark too. The
+         live overlay (#/shot) is a transparent sheet over the running screen,
+         so its page must stay see-through from the first paint. -->
     <script>
       if (location.hash.indexOf('#/capture') === 0) {
         document.documentElement.dataset.theme = 'dark'
         document.documentElement.classList.add('capture-boot')
+      } else if (location.hash.indexOf('#/shot') === 0) {
+        document.documentElement.dataset.theme = 'dark'
+        document.documentElement.classList.add('shot-live')
       }
     </script>
     <title>Transdict</title>

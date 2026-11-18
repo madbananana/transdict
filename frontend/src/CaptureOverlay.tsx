@@ -23,9 +23,11 @@ const HANDLES: { edge: Edge; cursor: string; x: number; y: number }[] = [
   { edge: { l: true, t: false, r: false, b: false }, cursor: 'ew-resize', x: 0, y: 0.5 },
 ]
 
-export default function CaptureOverlay({ frame }: { frame: number }) {
+export default function CaptureOverlay({ frame, live = false }: { frame: number; live?: boolean }) {
   const [frameURL, setFrameURL] = useState('')
-  const [loaded, setLoaded] = useState(false)
+  // The live overlay has nothing to wait for: the screen behind it is the
+  // picture, so the marquee answers from the first frame.
+  const [loaded, setLoaded] = useState(live)
   const [failed, setFailed] = useState(false)
   const [rect, setRect] = useState<Rect | null>(null)
   const [working, setWorking] = useState('')
@@ -73,43 +75,53 @@ export default function CaptureOverlay({ frame }: { frame: number }) {
   const commit = useCallback(
     (r: Rect) => {
       disarm()
-      const el = imgRef.current
-      if (!el || !el.naturalWidth || r.w < MIN_SIZE || r.h < MIN_SIZE) {
+      if (r.w < MIN_SIZE || r.h < MIN_SIZE) {
         cancel()
         return
       }
-      // The frozen screenshot is scaled to fill the window, so CSS pixels map to
-      // source pixels by the display's backing scale.
-      const k = el.naturalWidth / el.clientWidth
+      // The frozen overlay scales its picture to the window, so CSS pixels map
+      // to source pixels by the backing scale; the live overlay is drawn in the
+      // display's own points and needs no conversion.
+      let k = 1
+      if (!live) {
+        const el = imgRef.current
+        if (!el || !el.naturalWidth || !el.clientWidth) {
+          cancel()
+          return
+        }
+        k = el.naturalWidth / el.clientWidth
+      }
       setWorking(t('识别中…'))
       void Service.Commit(frame, Math.round(r.x * k), Math.round(r.y * k), Math.round(r.w * k), Math.round(r.h * k))
         .catch(() => cancel())
     },
-    [frame, cancel, disarm],
+    [frame, live, cancel, disarm],
   )
 
   useEffect(() => {
-    Service.FrameDataURL(frame)
-      .then((url) => {
-        if (url) {
-          setFrameURL(url)
-        } else {
-          setFailed(true)
-        }
-      })
-      .catch(() => setFailed(true))
+    if (!live) {
+      Service.FrameDataURL(frame)
+        .then((url) => {
+          if (url) {
+            setFrameURL(url)
+          } else {
+            setFailed(true)
+          }
+        })
+        .catch(() => setFailed(true))
+    }
     void Service.LastCaptureArea(frame).then((a) => setLastArea(a ?? null))
     void SettingsService.Get().then((cfg) => setHideTip(!!cfg?.hideScreenshotTip))
-  }, [frame])
+  }, [frame, live])
 
   // The window stays hidden until this reports back, so the first thing the
   // user sees is the frozen frame rather than a white webview. A capture that
   // failed still reports: the error message is the overlay's job too.
   useEffect(() => {
-    if (loaded || failed) {
+    if (!live && (loaded || failed)) {
       void Service.CaptureReady(frame).catch(() => undefined)
     }
-  }, [loaded, failed, frame])
+  }, [loaded, failed, frame, live])
 
   // 选择上一次截图区域: D reuses the rectangle of the last capture on this
   // display. It stays up for a second before it commits, the way EasyDict does,
@@ -117,10 +129,16 @@ export default function CaptureOverlay({ frame }: { frame: number }) {
   // which made that second read as a stall. Esc (or any new drag) is the way out.
   const reuseLast = useCallback(() => {
     const el = imgRef.current
-    if (!lastArea || !el || !el.naturalWidth || !el.clientWidth) {
+    if (!lastArea) {
       return
     }
-    const k = el.naturalWidth / el.clientWidth
+    let k = 1
+    if (!live) {
+      if (!el || !el.naturalWidth || !el.clientWidth) {
+        return
+      }
+      k = el.naturalWidth / el.clientWidth
+    }
     const r = { x: lastArea.x / k, y: lastArea.y / k, w: lastArea.w / k, h: lastArea.h / k }
     place(r)
     setArmed(true)
@@ -131,7 +149,7 @@ export default function CaptureOverlay({ frame }: { frame: number }) {
         commit(r)
       }
     }, 1000)
-  }, [lastArea, commit])
+  }, [lastArea, live, commit])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -233,7 +251,7 @@ export default function CaptureOverlay({ frame }: { frame: number }) {
 
   return (
     <div
-      className={armed ? 'capture armed' : 'capture'}
+      className={live ? (armed ? 'capture live armed' : 'capture live') : armed ? 'capture armed' : 'capture'}
       onMouseDown={(e) => {
         if (e.button !== 0 || !loaded || working) {
           return
@@ -305,8 +323,8 @@ export default function CaptureOverlay({ frame }: { frame: number }) {
       {failed && <div className="busy">{t('无法读取截图，请在系统设置中授予屏幕录制权限后重试。')}</div>}
       {/* The frozen frame crosses the bridge as an image, so the first moment
           after the shortcut is black; naming it keeps that from reading as a
-          failed capture. */}
-      {!loaded && !failed && <div className="busy">{t('正在准备截图…')}</div>}
+          failed capture. The live overlay has no such wait. */}
+      {!live && !loaded && !failed && <div className="busy">{t('正在准备截图…')}</div>}
       {!failed && working && <div className="busy">{working}</div>}
       {loaded && !working && !hideTip && (
         <div className="hint">

@@ -14,23 +14,27 @@ import { applyLocale } from './i18n'
 
 export type View = 'panel' | 'queryicon' | 'capture' | 'settings' | 'ocr' | 'logs' | 'update'
 
-export function hashRoute(): { view: View; frame: number } {
+export function hashRoute(): { view: View; frame: number; live: boolean } {
   const parts = window.location.hash.replace(/^#\/?/, '').split('/')
   switch (parts[0]) {
     case 'capture':
-      return { view: 'capture', frame: Number(parts[1] || '0') || 0 }
+      return { view: 'capture', frame: Number(parts[1] || '0') || 0, live: false }
+    // shot is the live marquee: a transparent sheet over the running screen,
+    // with the pixels read only after the selection is released.
+    case 'shot':
+      return { view: 'capture', frame: Number(parts[1] || '0') || 0, live: true }
     case 'queryicon':
-      return { view: 'queryicon', frame: 0 }
+      return { view: 'queryicon', frame: 0, live: false }
     case 'settings':
-      return { view: 'settings', frame: 0 }
+      return { view: 'settings', frame: 0, live: false }
     case 'ocr':
-      return { view: 'ocr', frame: 0 }
+      return { view: 'ocr', frame: 0, live: false }
     case 'logs':
-      return { view: 'logs', frame: 0 }
+      return { view: 'logs', frame: 0, live: false }
     case 'update':
-      return { view: 'update', frame: 0 }
+      return { view: 'update', frame: 0, live: false }
   }
-  return { view: 'panel', frame: 0 }
+  return { view: 'panel', frame: 0, live: false }
 }
 
 export default function App() {
@@ -49,7 +53,7 @@ export default function App() {
       .catch(() => undefined)
   }, [])
 
-  if (route.view === 'capture') return <CaptureOverlay frame={route.frame} />
+  if (route.view === 'capture') return <CaptureOverlay frame={route.frame} live={route.live} />
   if (route.view === 'queryicon') return <QueryIcon />
   if (route.view === 'settings') return <SettingsWindow />
   if (route.view === 'ocr') return <OcrWindow />

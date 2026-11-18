@@ -99,8 +99,11 @@ type Service struct {
 	mu       sync.Mutex
 	session  string
 	overlays []captureOverlay
-	lastCrop []byte
-	last     *query.Response
+	// captureBegan is when the last capture started, for the timing lines that
+	// say where the wait between the shortcut and the frozen screen goes.
+	captureBegan time.Time
+	lastCrop     []byte
+	last         *query.Response
 	// requestedPage is the settings tab an opener (关于, 历史) asked for. The
 	// window reads it when it mounts and a command names it when it is already
 	// open, because the click can land before or after the webview exists.
