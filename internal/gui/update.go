@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -271,7 +272,7 @@ func (s *Service) downloadAndInstall(ctx context.Context, cancel context.CancelF
 	}
 
 	s.setUpdateState(updateInstalling, "")
-	quit, message, err := update.Launch(path)
+	quit, message, err := update.Launch(path, notice.version)
 	if err != nil {
 		log.Printf("transdict: 启动更新程序失败: %v", err)
 		s.setUpdateState(updateError, err.Error())
@@ -294,6 +295,13 @@ func (s *Service) downloadAndInstall(ctx context.Context, cancel context.CancelF
 	go func() {
 		time.Sleep(3 * time.Second)
 		s.wails.Quit()
+	}()
+	// The helper waits for this process to exit before it touches the files,
+	// so a Quit that is held up would leave the update half-applied while the
+	// window claims it is installing. Nothing else is worth saving here.
+	go func() {
+		time.Sleep(12 * time.Second)
+		os.Exit(0)
 	}()
 }
 

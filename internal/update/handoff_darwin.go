@@ -18,7 +18,7 @@ import (
 // bundle that is still open cannot be removed. If the folder is not writable or
 // the build is not running from an app bundle, the image is opened in Finder so
 // the update is still one drag away.
-func Launch(path string) (bool, string, error) {
+func Launch(path, _ string) (bool, string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return openImage(path, "无法定位当前程序，已打开安装镜像。")

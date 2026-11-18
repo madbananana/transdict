@@ -18,7 +18,12 @@ import (
 // arguments avoids the quoting and newline problems of -Command, and the ready
 // file proves the helper really started: a script that never runs must not be
 // allowed to quit the app into a broken update.
-func Launch(path string) (bool, string, error) {
+//
+// version is the release being installed. The helper waits until the exe on
+// disk reports it before starting the app: an elevated installer can outlive
+// the process Start-Process waited for, and starting the old build is what
+// makes the app come back and ask for the same update again.
+func Launch(path, version string) (bool, string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return false, "", fmt.Errorf("无法定位当前程序：%w", err)
@@ -39,6 +44,7 @@ func Launch(path string) (bool, string, error) {
 		"-Installer", path,
 		"-Exe", exe,
 		"-Log", logPath,
+		"-Version", version,
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if err := cmd.Start(); err != nil {
@@ -67,7 +73,8 @@ const installScript = `param(
   [Parameter(Mandatory=$true)][int]$AppPid,
   [Parameter(Mandatory=$true)][string]$Installer,
   [Parameter(Mandatory=$true)][string]$Exe,
-  [Parameter(Mandatory=$true)][string]$Log
+  [Parameter(Mandatory=$true)][string]$Log,
+  [Parameter(Mandatory=$true)][string]$Version
 )
 
 $ErrorActionPreference = 'Continue'
@@ -78,6 +85,39 @@ function Write-Log([string]$Text) {
   }
 }
 
+# The version resource is the proof that the file on disk really was replaced;
+# reading it while the installer is still writing fails, which is why the
+# wait below polls instead of asking once.
+function Get-ExeVersion([string]$Path) {
+  try {
+    $info = (Get-Item -LiteralPath $Path).VersionInfo
+    if ($info.ProductVersion) { return [string]$info.ProductVersion }
+    return [string]$info.FileVersion
+  } catch {
+    return ''
+  }
+}
+
+function Test-VersionAtLeast([string]$Have, [string]$Want) {
+  $a = ($Have -replace '^[^0-9]*', '') -replace '[^0-9.].*$', ''
+  $b = ($Want -replace '^[^0-9]*', '') -replace '[^0-9.].*$', ''
+  if (-not $a -or -not $b) { return $false }
+  try {
+    return ([version]$a -ge [version]$b)
+  } catch {
+    return $false
+  }
+}
+
+function Wait-Installed([string]$Path, [string]$Want, [int]$Seconds) {
+  $deadline = (Get-Date).AddSeconds($Seconds)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-VersionAtLeast (Get-ExeVersion $Path) $Want) { return $true }
+    Start-Sleep -Milliseconds 500
+  }
+  return $false
+}
+
 Write-Log "waiting for process $AppPid"
 try {
   [IO.File]::WriteAllText(($Log + '.ready'), '1')
@@ -86,7 +126,8 @@ try {
 }
 
 while (Get-Process -Id $AppPid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 200 }
-Write-Log "application exited"
+$before = Get-ExeVersion $Exe
+Write-Log ("application exited; version on disk is " + $before)
 
 $ErrorActionPreference = 'Stop'
 try {
@@ -111,7 +152,24 @@ try {
   }
 }
 
-Write-Log "starting $Exe"
+# The exit code says the installer was started, not that it finished: an
+# elevated copy can still be copying when Start-Process returns. Starting the
+# app before the replacement lands brings the old build back, which then
+# offers the very update that was just installed.
+if ($before -and -not (Wait-Installed $Exe $Version 120)) {
+  Write-Log ("version on disk is still " + (Get-ExeVersion $Exe) + ", wanted " + $Version)
+  try {
+    Write-Log "re-running the installer interactively"
+    Start-Process -FilePath $Installer -Wait
+  } catch {
+    Write-Log ("interactive re-run failed: " + $_.Exception.Message)
+  }
+  if (-not (Wait-Installed $Exe $Version 60)) {
+    Write-Log ("still not installed: " + (Get-ExeVersion $Exe))
+  }
+}
+
+Write-Log ("starting $Exe (" + (Get-ExeVersion $Exe) + ")")
 try {
   Start-Process -FilePath $Exe
 } catch {
