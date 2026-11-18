@@ -127,9 +127,20 @@ jobs:
           go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      # choco exits 0 even when a feed hiccup leaves the package uninstalled
+      # (a 504 on the V2 feed has done exactly that), so the check is on the
+      # binary rather than on the exit code, and a transient failure is retried.
       - name: Install NSIS
         shell: pwsh
-        run: choco install nsis --no-progress -y
+        run: |
+          $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          for ($i = 1; $i -le 3; $i++) {
+            choco install nsis --no-progress -y
+            if (Test-Path $makensis) { exit 0 }
+            Write-Host "makensis missing after attempt $i, retrying"
+            Start-Sleep -Seconds 20
+          }
+          throw "NSIS is not installed: $makensis is missing"
 
       - name: Build installer
         shell: bash
