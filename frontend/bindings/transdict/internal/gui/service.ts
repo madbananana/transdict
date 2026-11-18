@@ -510,7 +510,7 @@ export function Permissions(): $CancellablePromise<$models.PermissionState> {
 /**
  * PickBlockedApp asks for an app and answers the row 禁止名单 stores. The panel
  * is the Finder's own 打开 sheet, so a bundle is picked visually instead of
- * typed as a bundle identifier.
+ * typed as a bundle identifier; on Windows the same sheet picks the .exe.
  */
 export function PickBlockedApp(): $CancellablePromise<settings$0.BlockedApp> {
     return $Call.ByID(150281290);
