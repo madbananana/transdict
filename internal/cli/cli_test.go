@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -101,10 +102,19 @@ func TestTrayMenuShowsEveryKeyedActionAndThePinTick(t *testing.T) {
 		t.Errorf("置顶译窗 = checkbox:%v checked:%v, want 勾选的复选框", pin.IsCheckbox(), pin.Checked())
 	}
 	for _, name := range []string{"界面语言", "主题", "翻译历史记录", "退出 Transdict",
-		"截图 OCR", "剪贴板 OCR", "显示 OCR 窗口", "关于 Transdict", "反馈", "菜单栏图标"} {
+		"截图 OCR", "剪贴板 OCR", "显示 OCR 窗口", "关于 Transdict", "反馈"} {
 		if menu.FindByLabel(l10n.T(name)) == nil {
 			t.Errorf("菜单缺少 %q", name)
 		}
+	}
+	// 菜单栏图标 and 开关划词翻译 exist where the platform can honour them:
+	// the status-item style is a menu bar concept, and the automatic selection
+	// watcher needs an accessibility read that only the macOS build has.
+	if darwin := runtime.GOOS == "darwin"; darwin != (menu.FindByLabel(l10n.T("菜单栏图标")) != nil) {
+		t.Errorf("菜单栏图标 在 %s 上的出现与否不对", runtime.GOOS)
+	}
+	if darwin := runtime.GOOS == "darwin"; darwin != (menu.FindByLabel(l10n.T("开关划词翻译")) != nil) {
+		t.Errorf("开关划词翻译 在 %s 上的出现与否不对", runtime.GOOS)
 	}
 }
 
@@ -115,9 +125,16 @@ func TestTrayMenuFollowsTheOCRMenuSwitch(t *testing.T) {
 	if !cfg.ShowOCRMenu {
 		t.Fatal("显示 OCR 菜单项 应当默认开启")
 	}
-	cfg.ShowOCRMenu = false
+	trio := []string{"截图 OCR", "剪贴板 OCR", "显示 OCR 窗口"}
 	menu := trayMenu(cfg, trayActions{})
-	for _, label := range []string{"截图 OCR", "剪贴板 OCR", "OCR 窗口"} {
+	for _, label := range trio {
+		if menu.FindByLabel(l10n.T(label)) == nil {
+			t.Errorf("默认菜单缺少 %q", label)
+		}
+	}
+	cfg.ShowOCRMenu = false
+	menu = trayMenu(cfg, trayActions{})
+	for _, label := range trio {
 		if menu.FindByLabel(l10n.T(label)) != nil {
 			t.Errorf("关闭后菜单仍显示 %q", label)
 		}

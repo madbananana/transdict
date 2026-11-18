@@ -742,13 +742,13 @@ func trayMenu(cur settings.Config, act trayActions) *application.Menu {
 
 	// The OCR entries are a preference because they double the length of a menu
 	// that is otherwise one shortcut per line; 显示 OCR 菜单项 is where Easydict
-	// puts them too. Only macOS reads a picture off the pasteboard, so elsewhere
-	// the switch would offer an entry that cannot work.
+	// puts them too. Every platform here recognizes both a screenshot and a
+	// picture on the pasteboard, so the trio is not macOS-only.
 	items := []*application.MenuItem{
 		keyed(item("截图翻译", act.capture), settings.SlotCapture),
 		keyed(item("静默截图 OCR", act.silentOCR), settings.SlotSilentOCR),
 	}
-	if cur.ShowOCRMenu && runtime.GOOS == "darwin" {
+	if cur.ShowOCRMenu {
 		items = append(items,
 			keyed(item("截图 OCR", act.captureOCR), settings.SlotOCRShot),
 			keyed(item("剪贴板 OCR", act.clipboardOCR), settings.SlotOCRClipboard),
