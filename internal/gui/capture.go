@@ -74,6 +74,7 @@ func (s *Service) start() error {
 		overlays := make([]captureOverlay, 0, len(screens))
 		for i, scr := range screens {
 			win := s.wails.Window.NewWithOptions(s.overlayOptions(i, scr.Bounds, true))
+			placeOverlay(win, scr.Bounds)
 			overlays = append(overlays, captureOverlay{frame: i, win: win})
 		}
 		s.mu.Lock()
@@ -118,6 +119,7 @@ func (s *Service) start() error {
 			frame = frames[min(i, len(frames)-1)]
 		}
 		win := s.wails.Window.NewWithOptions(s.overlayOptions(i, scr.Bounds, false))
+		placeOverlay(win, scr.Bounds)
 		// Wails colours the NSWindow, but the webview sits on top of it with its
 		// own opaque white surface until the page paints. Painting that surface
 		// black keeps even the hidden window's first visible frame dark. AppKit
@@ -166,6 +168,10 @@ func (s *Service) overlayOptions(index int, bounds application.Rect, live bool) 
 			// The overlay is a moment, not a window: it must not flash a
 			// taskbar button on the way to the selection.
 			HiddenOnTaskbar: true,
+			// Without this the DWM draws its own frame and shadow around the
+			// frameless window — on a see-through sheet that reads as a border
+			// over the live screen.
+			DisableFramelessWindowDecorations: true,
 		},
 	}
 	if live {
@@ -177,6 +183,10 @@ func (s *Service) overlayOptions(index int, bounds application.Rect, live bool) 
 		opts.BackgroundColour = application.NewRGBA(0, 0, 0, 0)
 		opts.Mac.Backdrop = application.MacBackdropTransparent
 		opts.URL = fmt.Sprintf("/#/shot/%d", index)
+		// Created hidden so the exact placement below lands before the first
+		// frame: Windows places a window created at (0,0) wherever the system
+		// likes, and the primary display is exactly (0,0).
+		opts.Hidden = true
 		return opts
 	}
 	opts.BackgroundType = application.BackgroundTypeSolid
@@ -377,7 +387,7 @@ func (s *Service) captureRegion(frameIndex, x, y, w, h int) ([]byte, error) {
 	if w <= 0 || h <= 0 {
 		return nil, errors.New("选区为空")
 	}
-	if png, err := capture.Region(frameIndex, x, y, w, h); err == nil {
+	if png, err := captureLiveRegion(s, frameIndex, x, y, w, h); err == nil {
 		return png, nil
 	}
 	// A build without the fast path still has to answer: capture every display

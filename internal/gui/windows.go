@@ -29,6 +29,14 @@ import (
 func (s *Service) present() {
 	s.show(WindowMain, true)
 	application.InvokeAsync(dock.Activate)
+	// A screenshot answer surfaces while the overlay that was key is still
+	// closing. AppKit completes that handover a turn later and can give
+	// activation back to the app the user came from after our request has
+	// already run, leaving the panel behind it. Asking once more after the
+	// handover has landed keeps the answer on top.
+	application.InvokeAsync(func() {
+		time.AfterFunc(250*time.Millisecond, func() { application.InvokeAsync(dock.Activate) })
+	})
 }
 
 // ownChrome reports whether the header draws the window controls. macOS keeps
